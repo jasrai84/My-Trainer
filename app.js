@@ -213,8 +213,17 @@ function seededShuffle(arr, seed) {
 // Auto-rotated pool sticks to indoor/limited-space moves (garage gym default).
 // Sled is left out of the automatic rotation — it needs open space — but stays
 // available as a manual pick via "Select New Workout" for days with room to set up outdoors.
-const AUTO_FINISHER_KEYS = ["ski", "rope", "kbSwing", "treadmill", "burpee"];
-const ALL_FINISHER_KEYS = [...AUTO_FINISHER_KEYS, "sled"];
+// Rower/wall ball only join the pool once that equipment is switched on in Settings.
+const BASE_AUTO_FINISHER_KEYS = ["ski", "rope", "kbSwing", "treadmill", "burpee"];
+function getAutoFinisherKeys(equipment) {
+  const extra = [];
+  if (equipment?.rower) extra.push("row");
+  if (equipment?.wallball) extra.push("wallball");
+  return [...BASE_AUTO_FINISHER_KEYS, ...extra];
+}
+function getAllFinisherKeys(equipment) {
+  return [...getAutoFinisherKeys(equipment), "sled"];
+}
 const FINISHER_META = {
   ski: { label: "Ski Erg intervals", space: "Minimal space — indoor friendly" },
   rope: { label: "Battle rope waves", space: "Minimal space — indoor friendly" },
@@ -222,6 +231,8 @@ const FINISHER_META = {
   treadmill: { label: "Treadmill sprints", space: "Minimal space — indoor friendly" },
   burpee: { label: "Burpee broad jumps", space: "Small clear floor area" },
   sled: { label: "Sled push (Bulldog Saxon)", space: "Needs open space — garden/outdoors" },
+  row: { label: "Rowing intervals", space: "Minimal space — indoor friendly" },
+  wallball: { label: "Wall balls", space: "Needs ceiling height — indoor or garage" },
 };
 function condShort(week, style) {
   const bump = Math.min(3, Math.floor(week / 6));
@@ -232,34 +243,42 @@ function condShort(week, style) {
     kbSwing: [{ name: `Kettlebell swings (${nearestFrom(KB_WEIGHTS, 16 + bump * 2)}kg)`, detail: `${4 + bump} x 20 reps, 45s rest` }],
     treadmill: [{ name: "Treadmill sprints", detail: `${4 + bump} x 200m hard, walk-back recovery` }],
     burpee: [{ name: "Burpee broad jumps", detail: `${3 + bump} x 10 reps, rest as needed` }],
+    row: [{ name: "Rowing intervals", detail: `${5 + bump} x 250m, 30s rest — drive with the legs` }],
+    wallball: [{ name: "Wall balls", detail: `${4 + bump} x 15 reps, rest as needed` }],
   };
   return blocks[style];
 }
 // Deterministic-but-varied weekly assignment: shuffles the auto pool with the
 // week number as a seed, so it's different week to week but stable if you revisit a week.
-function weeklyFinisherAssignment(week) {
-  const order = seededShuffle(AUTO_FINISHER_KEYS, week * 97 + 13);
+function weeklyFinisherAssignment(week, equipment) {
+  const order = seededShuffle(getAutoFinisherKeys(equipment), week * 97 + 13);
   const days = ["mon", "tue", "thu", "fri"];
   const map = {};
   days.forEach((d, i) => (map[d] = order[i % order.length]));
   return map;
 }
 
-function hyroxSimSession(week) {
+function hyroxSimSession(week, equipment) {
   const phase = getPhase(week);
   const runM = { foundation: 400, build: 500, intensify: 600, peak: 600, race: 300 }[phase.id];
   const stations = phase.id === "foundation" ? 4 : phase.id === "build" ? 6 : phase.id === "race" ? 3 : 8;
   const kbSwingW = nearestFrom(KB_WEIGHTS, 16);
   const dbThrusterW = roundAdjDb(12);
+  const rowStation = equipment?.rower
+    ? { name: "Rowing — 1000m", detail: "Real Hyrox distance, steady power off the legs" }
+    : { name: `KB swings (${kbSwingW}kg) — rowing sub`, detail: "No rower: max-effort KB swings for the same interval" };
+  const wallballStation = equipment?.wallball
+    ? { name: "Wall Balls — 100 reps", detail: "Real Hyrox rep count, break early rather than grind late" }
+    : { name: `DB thrusters (${dbThrusterW}kg pair) — wall ball sub`, detail: "No wall ball: thrusters mimic leg-drive-to-overhead" };
   const pool = [
     { name: "Ski Erg", detail: "250-500m depending on station count" },
     { name: "Sled Push (Bulldog Saxon)", detail: "25m down, moderate-heavy load" },
     { name: "Sled Pull (Bulldog Saxon)", detail: "25m back, rope/strap pull" },
     { name: "Burpee broad jumps", detail: "15-20m worth of reps" },
-    { name: `KB swings (${kbSwingW}kg) — rowing sub`, detail: "No rower: max-effort KB swings for the same interval" },
+    rowStation,
     { name: "Farmer's carry (trap bar or heavy DBs)", detail: "40-50m" },
     { name: "Weighted lunges (vest or dip belt)", detail: "40-50m, controlled depth" },
-    { name: `DB thrusters (${dbThrusterW}kg pair) — wall ball sub`, detail: "No wall ball: thrusters mimic leg-drive-to-overhead" },
+    wallballStation,
   ];
   return { title: `Hyrox Simulation — ${stations} station${stations > 1 ? "s" : ""}`, intro: `Run ${runM}m between every station, race-effort pace, station straight into the next run.`, stations: pool.slice(0, stations) };
 }
@@ -306,11 +325,11 @@ function dynamicWarmup(dayKey) {
   return sets[dayKey] || [];
 }
 
-function buildDaySession(dayKey, week, profile, logs) {
+function buildDaySession(dayKey, week, profile, logs, equipment) {
   const phase = getPhase(week);
   const deload = isDeload(week);
   const sets = deload ? Math.max(2, phase.sets - 1) : phase.sets;
-  const finishers = weeklyFinisherAssignment(week);
+  const finishers = weeklyFinisherAssignment(week, equipment);
   const warmup = dynamicWarmup(dayKey);
   const override = logs[wKey(week)]?.days?.[dayKey]?.finisherOverride;
   const finisherFor = (d) => override || finishers[d];
@@ -334,13 +353,17 @@ function buildDaySession(dayKey, week, profile, logs) {
     };
   }
   if (dayKey === "tue") {
+    const strength = [
+      mkMain("swissBench", "Swiss Bar Bench Press (shoulder-friendly grip)", "28kg Swiss bar"),
+      mkAcc("pullup", "Weighted pull-ups", "pull-up bar + dip belt", sets, "5-8"),
+      mkAcc("dips", "Weighted dips", "dip bar + dip belt", 3, "8-10"),
+    ];
+    if (equipment?.adjustableBench) {
+      strength.push(mkAcc("inclinebench", "Incline DB Bench Press", "adjustable bench + dumbbells", 3, "8-10"));
+    }
     return {
       dayType: "Upper Push/Pull", warmup,
-      strength: [
-        mkMain("swissBench", "Swiss Bar Bench Press (shoulder-friendly grip)", "28kg Swiss bar"),
-        mkAcc("pullup", "Weighted pull-ups", "pull-up bar + dip belt", sets, "5-8"),
-        mkAcc("dips", "Weighted dips", "dip bar + dip belt", 3, "8-10"),
-      ],
+      strength,
       conditioning: condShort(week, finisherFor("tue")), conditioningKey: finisherFor("tue"),
     };
   }
@@ -366,7 +389,7 @@ function buildDaySession(dayKey, week, profile, logs) {
       conditioning: condShort(week, finisherFor("fri")), conditioningKey: finisherFor("fri"),
     };
   }
-  if (dayKey === "sat") return { dayType: "Hyrox Simulation", warmup, sim: hyroxSimSession(week) };
+  if (dayKey === "sat") return { dayType: "Hyrox Simulation", warmup, sim: hyroxSimSession(week, equipment) };
   return null;
 }
 
@@ -510,14 +533,21 @@ function recommendRestSeconds(ex) {
   return low <= 5 ? 90 : 60;
 }
 
+function parseTargetReps(reps) {
+  const m = String(reps || "").match(/(\d+)(?!.*\d)/);
+  return m ? m[1] : "";
+}
+
 function ExerciseCard({ ex, week, logs, dayType, onSave }) {
   const wk = wKey(week);
   const existing = logs[wk]?.entries?.[ex.id];
   const last = getLastEntry(logs, ex.id, week);
+  const defaultReps = parseTargetReps(ex.reps);
 
   const [weight, setWeight] = useState(existing?.weight ?? ex.weightKg ?? last?.weight ?? "");
   const [rpe, setRpe] = useState(existing?.rpe ?? "");
   const [done, setDone] = useState(existing?.setsCompleted ?? Array(ex.sets).fill(false));
+  const [repsPerSet, setRepsPerSet] = useState(existing?.repsPerSet ?? Array(ex.sets).fill(""));
   const [showScale, setShowScale] = useState(false);
   const [restRemaining, setRestRemaining] = useState(null);
 
@@ -534,27 +564,37 @@ function ExerciseCard({ ex, week, logs, dayType, onSave }) {
     setWeight(existing?.weight ?? ex.weightKg ?? last?.weight ?? "");
     setRpe(existing?.rpe ?? "");
     setDone(existing?.setsCompleted ?? Array(ex.sets).fill(false));
+    setRepsPerSet(existing?.repsPerSet ?? Array(ex.sets).fill(""));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ex.id, week]);
 
-  const persist = (nextDone, nextWeight, nextRpe) => {
+  const persist = (nextDone, nextWeight, nextRpe, nextReps) => {
     onSave(ex.id, {
       name: ex.name, liftKey: ex.liftKey || null, dayType,
       weight: parseFloat(nextWeight) || null,
       rpe: parseFloat(nextRpe) || null,
       setsCompleted: nextDone, totalSets: ex.sets,
+      repsPerSet: nextReps, date: new Date().toISOString(),
     });
   };
 
   const toggleSet = (i) => {
     const wasDone = done[i];
     const next = [...done]; next[i] = !next[i]; setDone(next);
-    persist(next, weight, rpe);
+    let nextReps = repsPerSet;
+    if (!wasDone && next[i] && !repsPerSet[i]) {
+      nextReps = [...repsPerSet]; nextReps[i] = defaultReps; setRepsPerSet(nextReps);
+    }
+    persist(next, weight, rpe, nextReps);
     if (!wasDone && next[i] && next.filter(Boolean).length < ex.sets) {
       setRestRemaining(recommendRestSeconds(ex));
     } else if (wasDone) {
       setRestRemaining(null); // un-checking a set cancels any running rest
     }
+  };
+  const setReps = (i, val) => {
+    const next = [...repsPerSet]; next[i] = val; setRepsPerSet(next);
+    persist(done, weight, rpe, next);
   };
   const completedCount = done.filter(Boolean).length;
 
@@ -607,12 +647,17 @@ function ExerciseCard({ ex, week, logs, dayType, onSave }) {
         <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint, marginBottom: 6 }}>SETS · {completedCount}/{ex.sets} DONE</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {done.map((d, i) => (
-            <button key={i} onClick={() => toggleSet(i)} style={{
-              width: 34, height: 34, borderRadius: "50%", border: `2px solid ${d ? C.hazard : C.line}`,
-              background: d ? C.hazard : "transparent", cursor: "pointer",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontFamily: FONT_MONO, fontSize: 15, color: d ? "#1A1A1A" : C.textDim, fontWeight: 700,
-            }}>{i + 1}</button>
+            <div key={i} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+              <button onClick={() => toggleSet(i)} style={{
+                width: 34, height: 34, borderRadius: "50%", border: `2px solid ${d ? C.hazard : C.line}`,
+                background: d ? C.hazard : "transparent", cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontFamily: FONT_MONO, fontSize: 15, color: d ? "#1A1A1A" : C.textDim, fontWeight: 700,
+              }}>{i + 1}</button>
+              <input type="number" value={repsPerSet[i]} onChange={(e) => setReps(i, e.target.value)} placeholder={defaultReps}
+                title="Reps completed"
+                style={{ width: 34, textAlign: "center", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 4, padding: "3px 0", color: C.textDim, fontFamily: FONT_MONO, fontSize: 11, outline: "none" }} />
+            </div>
           ))}
         </div>
       </div>
@@ -700,6 +745,7 @@ function useTimerEngine() {
   const [phaseRemaining, setPhaseRemaining] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [rounds, setRounds] = useState(0);
+  const [reps, setReps] = useState(0);
   const [finished, setFinished] = useState(false);
   const phasesRef = useRef([]);
 
@@ -726,7 +772,7 @@ function useTimerEngine() {
   const pause = () => setRunning(false);
   const resume = () => setRunning(true);
   const reset = () => {
-    setRunning(false); setPreCounting(false); setFinished(false); setElapsed(0); setRounds(0); setPhaseIdx(0);
+    setRunning(false); setPreCounting(false); setFinished(false); setElapsed(0); setRounds(0); setReps(0); setPhaseIdx(0);
     setPhaseRemaining((buildPhases(cfg)[0] || {}).seconds || 0);
   };
 
@@ -780,7 +826,7 @@ function useTimerEngine() {
   const phases = cfg.mode === "fortime" ? [] : buildPhases(cfg);
   const currentPhase = phases[phaseIdx];
 
-  return { cfg, setCfg, running, start, skipPreCountdown, pause, resume, reset, preCounting, preRemaining, phaseIdx, phaseRemaining, elapsed, rounds, setRounds, finished, phases, currentPhase };
+  return { cfg, setCfg, running, start, skipPreCountdown, pause, resume, reset, preCounting, preRemaining, phaseIdx, phaseRemaining, elapsed, rounds, setRounds, reps, setReps, finished, phases, currentPhase };
 }
 
 function MiniTimerBar({ engine, onOpen }) {
@@ -804,9 +850,13 @@ function MiniTimerBar({ engine, onOpen }) {
   );
 }
 
-function TimerTab({ engine, onLogResult }) {
-  const { cfg, setCfg, running, start, skipPreCountdown, pause, resume, reset, preCounting, preRemaining, phaseRemaining, elapsed, rounds, setRounds, finished, currentPhase } = engine;
+function TimerTab({ engine, onLogResult, context, onClearContext }) {
+  const { cfg, setCfg, running, start, skipPreCountdown, pause, resume, reset, preCounting, preRemaining, phaseRemaining, elapsed, rounds, setRounds, reps, setReps, finished, currentPhase } = engine;
   const [label, setLabel] = useState("");
+
+  useEffect(() => {
+    if (context?.title) setLabel(context.title);
+  }, [context]);
 
   const numInput = (val, onChange, w = 70) => (
     <input type="number" value={val} onChange={(e) => onChange(parseInt(e.target.value) || 0)}
@@ -815,12 +865,27 @@ function TimerTab({ engine, onLogResult }) {
 
   const saveResult = () => {
     const result = cfg.mode === "fortime" ? fmtTime(elapsed) : cfg.mode === "amrap" ? `${rounds} rounds in ${fmtTime(cfg.amrapMinutes * 60)}` : fmtTime(elapsed);
-    onLogResult({ mode: cfg.mode, label: label || TIMER_MODES.find((m) => m.id === cfg.mode)?.label, result, elapsedSeconds: elapsed, rounds: cfg.mode === "amrap" ? rounds : null, date: new Date().toISOString() });
+    onLogResult({ mode: cfg.mode, label: label || TIMER_MODES.find((m) => m.id === cfg.mode)?.label, result, elapsedSeconds: elapsed, rounds: cfg.mode === "amrap" ? rounds : null, reps, date: new Date().toISOString() });
     setLabel("");
     reset();
   };
 
   const isIdle = !running && elapsed === 0 && !finished;
+
+  const ContextCard = context ? (
+    <div style={{ background: C.signalDim, border: `1px solid ${C.signal}`, borderRadius: 10, padding: 14, marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+        <div style={{ fontFamily: FONT_DISPLAY, color: C.signal, fontSize: 16, textTransform: "uppercase" }}>{context.title}</div>
+        <button onClick={onClearContext} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><Trash2 size={14} color={C.textFaint} /></button>
+      </div>
+      {(context.items || []).map((it, i) => (
+        <div key={i} style={{ padding: "6px 0", borderTop: i > 0 ? `1px solid ${C.lineFaint}` : "none" }}>
+          <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 14 }}>{it.name}</div>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim, marginTop: 1 }}>{it.detail}</div>
+        </div>
+      ))}
+    </div>
+  ) : null;
 
   if (preCounting) {
     return (
@@ -837,6 +902,8 @@ function TimerTab({ engine, onLogResult }) {
     <div style={{ maxWidth: 560, margin: "0 auto", padding: "calc(env(safe-area-inset-top) + 36px) 16px 100px" }}>
       <div style={{ fontFamily: FONT_MONO, color: C.hazard, fontSize: 14, letterSpacing: 2, marginBottom: 4 }}>TIMER</div>
       <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 31, color: C.text, margin: "0 0 16px", textTransform: "uppercase" }}>Work the clock</h1>
+
+      {ContextCard}
 
       <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap" }}>
         {TIMER_MODES.map((m) => (
@@ -920,6 +987,13 @@ function TimerTab({ engine, onLogResult }) {
             <button onClick={() => setRounds((r) => Math.max(0, r - 1))} style={{ width: 40, height: 40, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer" }}><Minus size={16} color={C.text} style={{ margin: "auto" }} /></button>
             <div style={{ fontFamily: FONT_MONO, color: C.text, fontSize: 22 }}>{rounds} <span style={{ fontSize: 13, color: C.textFaint }}>ROUNDS</span></div>
             <button onClick={() => setRounds((r) => r + 1)} style={{ width: 40, height: 40, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer" }}><Plus size={16} color={C.text} style={{ margin: "auto" }} /></button>
+          </div>
+        )}
+        {(running || elapsed > 0) && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginTop: 14 }}>
+            <button onClick={() => setReps((r) => Math.max(0, r - 1))} style={{ width: 34, height: 34, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer" }}><Minus size={14} color={C.text} style={{ margin: "auto" }} /></button>
+            <div style={{ fontFamily: FONT_MONO, color: C.text, fontSize: 18 }}>{reps} <span style={{ fontSize: 12, color: C.textFaint }}>REPS</span></div>
+            <button onClick={() => setReps((r) => r + 1)} style={{ width: 34, height: 34, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer" }}><Plus size={14} color={C.text} style={{ margin: "auto" }} /></button>
           </div>
         )}
       </div>
@@ -1013,8 +1087,32 @@ function CalendarView({ completedDays }) {
 /* =========================================================================
    LOG TAB
    ======================================================================= */
+function SingleLineChart({ points }) {
+  const W = 560, H = 140, PAD = 28;
+  if (!points || points.length < 2) return null;
+  const weeks = points.map((p) => p.week);
+  const vals = points.map((p) => p.weight);
+  const minW = Math.min(...weeks), maxW = Math.max(...weeks);
+  const minV = Math.min(...vals), maxV = Math.max(...vals);
+  const x = (w) => PAD + ((w - minW) / Math.max(1, maxW - minW)) * (W - PAD * 2);
+  const y = (v) => H - PAD - ((v - minV) / Math.max(1, maxV - minV || 1)) * (H - PAD * 2);
+  const pts = points.map((p) => `${x(p.week)},${y(p.weight)}`).join(" ");
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} style={{ display: "block" }}>
+      {[0, 0.5, 1].map((t, i) => (
+        <line key={i} x1={PAD} x2={W - PAD} y1={PAD + t * (H - PAD * 2)} y2={PAD + t * (H - PAD * 2)} stroke="#292D2F" strokeDasharray="3 3" />
+      ))}
+      <polyline points={pts} fill="none" stroke={C.hazard} strokeWidth="2" />
+      {points.map((p, i) => <circle key={i} cx={x(p.week)} cy={y(p.weight)} r="3" fill={C.hazard} />)}
+      <text x={PAD} y={H - 6} fill="#6B7275" fontSize="12" fontFamily="'JetBrains Mono', monospace">W{minW}</text>
+      <text x={W - PAD} y={H - 6} textAnchor="end" fill="#6B7275" fontSize="12" fontFamily="'JetBrains Mono', monospace">W{maxW}</text>
+    </svg>
+  );
+}
+
 function LogTab({ logs, timerLogs }) {
   const completedDays = useMemo(() => allCompletedDays(logs), [logs]);
+  const [expanded, setExpanded] = useState(null);
 
   const byExercise = useMemo(() => {
     const map = {};
@@ -1056,18 +1154,39 @@ function LogTab({ logs, timerLogs }) {
 
       <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, letterSpacing: 1, marginBottom: 10 }}>EXERCISE HISTORY</div>
       {Object.keys(byExercise).length === 0 && <div style={{ fontFamily: FONT_BODY, color: C.textFaint, fontSize: 15, marginBottom: 20 }}>Nothing logged yet — complete a session to see progression here.</div>}
-      {Object.entries(byExercise).map(([name, arr]) => (
-        <div key={name} style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: 14, marginBottom: 10 }}>
-          <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 16, marginBottom: 6 }}>{name}</div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {arr.map((e, i) => (
-              <span key={i} style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textDim, background: C.bgRaised, padding: "4px 8px", borderRadius: 4 }}>
-                W{e.week}: {fmtKg(e.weight)}kg
-              </span>
-            ))}
+      {Object.entries(byExercise).map(([name, arr]) => {
+        const isOpen = expanded === name;
+        const chartPoints = arr.map((e) => ({ week: e.week, weight: e.weight }));
+        const tableRows = [...arr].reverse();
+        return (
+          <div key={name} style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: 14, marginBottom: 10 }}>
+            <button onClick={() => setExpanded(isOpen ? null : name)} style={{ width: "100%", background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 16 }}>{name}</div>
+              <ChevronRight size={16} color={C.textFaint} style={{ transform: isOpen ? "rotate(90deg)" : "none" }} />
+            </button>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+              {arr.map((e, i) => (
+                <span key={i} style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textDim, background: C.bgRaised, padding: "4px 8px", borderRadius: 4 }}>
+                  W{e.week}: {fmtKg(e.weight)}kg
+                </span>
+              ))}
+            </div>
+            {isOpen && (
+              <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.line}` }}>
+                <SingleLineChart points={chartPoints} />
+                <div style={{ marginTop: 12 }}>
+                  {tableRows.map((e, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderTop: i > 0 ? `1px solid ${C.lineFaint}` : "none" }}>
+                      <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textDim }}>{e.date ? new Date(e.date).toLocaleDateString() : `Week ${e.week}`}</span>
+                      <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.text, fontWeight: 700 }}>{fmtKg(e.weight)}kg</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
 
       <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, letterSpacing: 1, margin: "24px 0 10px" }}>CONDITIONING TIMES</div>
       {(!timerLogs || timerLogs.length === 0) && <div style={{ fontFamily: FONT_BODY, color: C.textFaint, fontSize: 15 }}>No timed sessions logged yet.</div>}
@@ -1111,13 +1230,31 @@ function WarmupBlock({ warmup }) {
 /* =========================================================================
    PROGRAM TAB (dashboard + session)
    ======================================================================= */
-function LiveStopwatch({ startedAtIso }) {
+const STALE_WORKOUT_SECONDS = 4 * 3600; // 4 hours — beyond this, it's almost certainly a forgotten Finish, not a real session
+
+function LiveStopwatch({ startedAtIso, onReset }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
   const elapsed = Math.max(0, (now - new Date(startedAtIso).getTime()) / 1000);
+  const stale = elapsed > STALE_WORKOUT_SECONDS;
+
+  if (stale) {
+    return (
+      <div style={{ background: C.hazardDim, border: `1px solid ${C.hazard}`, borderRadius: 8, padding: 12, marginBottom: 14 }}>
+        <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.hazard, fontSize: 14 }}>This looks like an old, forgotten start</div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim, marginTop: 4, lineHeight: 1.4 }}>
+          Started {fmtDuration(elapsed)} ago — probably a session you forgot to finish. Reset it to start fresh.
+        </div>
+        <button onClick={onReset} style={{ marginTop: 10, background: C.hazard, border: "none", borderRadius: 6, padding: "8px 14px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 13, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
+          Reset now
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
       <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.hazard }} />
@@ -1127,11 +1264,11 @@ function LiveStopwatch({ startedAtIso }) {
   );
 }
 
-function FinisherPicker({ activeKey, onSelect, onClose }) {
+function FinisherPicker({ activeKey, availableKeys, onSelect, onClose }) {
   return (
     <div style={{ background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
       <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint, letterSpacing: 1, marginBottom: 10 }}>SWAP THIS FINISHER</div>
-      {ALL_FINISHER_KEYS.map((key) => {
+      {availableKeys.map((key) => {
         const meta = FINISHER_META[key];
         const isActive = key === activeKey;
         return (
@@ -1153,7 +1290,18 @@ function FinisherPicker({ activeKey, onSelect, onClose }) {
   );
 }
 
-function ProgramTab({ profile, logs, saveEntry, saveDayMeta, week, setWeek, engine, onOpenTimer, onOpenChat }) {
+function RepsStepper({ value, onChange, label = "REPS/ROUNDS" }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+      <span style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, letterSpacing: 1 }}>{label}</span>
+      <button onClick={() => onChange(Math.max(0, (value || 0) - 1))} style={{ width: 28, height: 28, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgRaised, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Minus size={13} color={C.text} /></button>
+      <span style={{ fontFamily: FONT_MONO, fontSize: 16, color: C.text, minWidth: 20, textAlign: "center" }}>{value || 0}</span>
+      <button onClick={() => onChange((value || 0) + 1)} style={{ width: 28, height: 28, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgRaised, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Plus size={13} color={C.text} /></button>
+    </div>
+  );
+}
+
+function ProgramTab({ profile, logs, equipment, saveEntry, saveDayMeta, week, setWeek, engine, onOpenTimer, onTimeWorkout }) {
   const [activeDay, setActiveDay] = useState(null);
   const [quoteIdx] = useState(() => Math.floor(Math.random() * QUOTES.length));
   const [tipIdx] = useState(() => Math.floor(Math.random() * TIPS.length));
@@ -1162,19 +1310,25 @@ function ProgramTab({ profile, logs, saveEntry, saveDayMeta, week, setWeek, engi
   const phase = getPhase(week);
   const deload = isDeload(week);
   const phaseIdx = PHASES.findIndex((p) => p.id === phase.id);
-  const sessions = useMemo(() => DAY_DEFS.map((d) => ({ ...d, session: buildDaySession(d.key, week, profile, logs) })), [week, profile, logs]);
+  const sessions = useMemo(() => DAY_DEFS.map((d) => ({ ...d, session: buildDaySession(d.key, week, profile, logs, equipment) })), [week, profile, logs, equipment]);
   const active = activeDay ? sessions.find((s) => s.key === activeDay) : null;
   const wk = wKey(week);
 
   const openDay = (key) => { setActiveDay(key); setShowFinisherPicker(false); };
   const startWorkout = (key, dayType) => saveDayMeta(key, { startedAt: new Date().toISOString(), dayType, completedAt: null });
   const finishWorkout = (key, dayType) => saveDayMeta(key, { completedAt: new Date().toISOString(), dayType });
+  const resetDay = (key) => {
+    if (!window.confirm("Reset this day? This clears the start/finish time (your logged sets and weights stay).")) return;
+    saveDayMeta(key, { startedAt: null, completedAt: null });
+  };
+  const resetDaySilent = (key) => saveDayMeta(key, { startedAt: null, completedAt: null });
 
   if (active) {
     const { session, label, mins } = active;
     const dayMeta = logs[wk]?.days?.[active.key];
     const started = !!dayMeta?.startedAt;
     const completed = !!dayMeta?.completedAt;
+    const conditioningReps = dayMeta?.conditioningReps || {};
     return (
       <div style={{ maxWidth: 560, margin: "0 auto", padding: "calc(env(safe-area-inset-top) + 36px) 16px 100px" }}>
         <button onClick={() => setActiveDay(null)} style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: C.textDim, fontFamily: FONT_BODY, fontSize: 15, cursor: "pointer", padding: 0, marginBottom: 16 }}>
@@ -1185,14 +1339,15 @@ function ProgramTab({ profile, logs, saveEntry, saveDayMeta, week, setWeek, engi
         <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 31, color: C.text, margin: "6px 0 4px", textTransform: "uppercase" }}>{session.dayType}</h2>
         {deload && <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.signal, marginBottom: 8 }}>DELOAD WEEK — reduced load, same intent</div>}
 
-        {completed ? (
-          <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.hazard, marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>
+        {completed && (
+          <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.hazard, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
             <CheckCircle2 size={14} /> Completed {fmtCompletedDate(dayMeta.completedAt)}
             {dayMeta.startedAt && ` · ${fmtDuration((new Date(dayMeta.completedAt) - new Date(dayMeta.startedAt)) / 1000)}`}
           </div>
-        ) : started ? (
-          <LiveStopwatch startedAtIso={dayMeta.startedAt} />
-        ) : (
+        )}
+        {started && !completed && <LiveStopwatch startedAtIso={dayMeta.startedAt} onReset={() => resetDaySilent(active.key)} />}
+
+        {!started && (
           <button onClick={() => startWorkout(active.key, session.dayType)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: C.hazard, border: "none", borderRadius: 8, padding: "14px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", marginBottom: 16 }}>
             <Play size={18} /> Start Workout
           </button>
@@ -1203,7 +1358,7 @@ function ProgramTab({ profile, logs, saveEntry, saveDayMeta, week, setWeek, engi
         {session?.sim ? (
           <>
             <SimBlock sim={session.sim} />
-            <button onClick={onOpenTimer} style={{ marginTop: 14, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: C.signalDim, border: `1px solid ${C.signal}`, borderRadius: 8, padding: "12px", color: C.signal, fontFamily: FONT_DISPLAY, fontSize: 16, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
+            <button onClick={() => onTimeWorkout(session.sim.title, session.sim.stations)} style={{ marginTop: 14, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: C.signalDim, border: `1px solid ${C.signal}`, borderRadius: 8, padding: "12px", color: C.signal, fontFamily: FONT_DISPLAY, fontSize: 16, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
               <TimerIcon size={16} /> Time this session
             </button>
           </>
@@ -1213,17 +1368,19 @@ function ProgramTab({ profile, logs, saveEntry, saveDayMeta, week, setWeek, engi
             {session.strength.map((ex) => <ExerciseCard key={ex.id} ex={ex} week={week} logs={logs} dayType={session.dayType} onSave={saveEntry} />)}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 0 8px" }}>
               <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, letterSpacing: 1 }}>CONDITIONING · 10-15 MIN</div>
-              <button onClick={onOpenTimer} style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: C.signal, fontFamily: FONT_MONO, fontSize: 13, cursor: "pointer" }}><TimerIcon size={13} /> Time it</button>
+              <button onClick={() => onTimeWorkout(`${session.dayType} Finisher`, session.conditioning)} style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: C.signal, fontFamily: FONT_MONO, fontSize: 13, cursor: "pointer" }}><TimerIcon size={13} /> Time it</button>
             </div>
             {session.conditioning.map((c, i) => (
               <div key={i} style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: 14, marginBottom: 8 }}>
                 <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 16 }}>{c.name}</div>
                 <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: C.textDim, marginTop: 3 }}>{c.detail}</div>
+                <RepsStepper value={conditioningReps[i]} onChange={(v) => saveDayMeta(active.key, { conditioningReps: { ...conditioningReps, [i]: v } })} />
               </div>
             ))}
             {showFinisherPicker ? (
               <FinisherPicker
                 activeKey={session.conditioningKey}
+                availableKeys={getAllFinisherKeys(equipment)}
                 onSelect={(key) => { saveDayMeta(active.key, { finisherOverride: key }); setShowFinisherPicker(false); }}
                 onClose={() => setShowFinisherPicker(false)}
               />
@@ -1238,6 +1395,11 @@ function ProgramTab({ profile, logs, saveEntry, saveDayMeta, week, setWeek, engi
         {started && !completed && (
           <button onClick={() => finishWorkout(active.key, session.dayType)} style={{ marginTop: 20, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "none", border: `1px solid ${C.hazard}`, borderRadius: 8, padding: "14px", color: C.hazard, fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
             <CheckCircle2 size={18} /> Finish Workout
+          </button>
+        )}
+        {started && (
+          <button onClick={() => resetDay(active.key)} style={{ marginTop: 10, width: "100%", background: "none", border: "none", color: C.textFaint, fontFamily: FONT_MONO, fontSize: 12, padding: "6px 0", cursor: "pointer" }}>
+            Reset (accidentally started?)
           </button>
         )}
       </div>
@@ -1369,12 +1531,62 @@ function useWakeLock() {
   }, [requestLock]);
 }
 
+const DEFAULT_EQUIPMENT = { adjustableBench: false, rower: false, wallball: false };
+
+function SettingsModal({ equipment, onSaveEquipment, onReset, onClose }) {
+  const [local, setLocal] = useState(equipment);
+  const toggle = (key) => setLocal((l) => ({ ...l, [key]: !l[key] }));
+  const items = [
+    { key: "adjustableBench", label: "Adjustable Bench", detail: "Unlocks Incline DB Bench Press as a Tuesday accessory" },
+    { key: "rower", label: "Rower", detail: "Adds Row as a finisher option, and swaps in real rowing on the Hyrox sim" },
+    { key: "wallball", label: "Wall Ball", detail: "Adds Wall Balls as a finisher option, and swaps in real wall balls on the Hyrox sim" },
+  ];
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "flex-end", zIndex: 50 }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: C.bgRaised, width: "100%", maxHeight: "85vh", overflowY: "auto", borderRadius: "16px 16px 0 0", border: `1px solid ${C.line}`, borderBottom: "none", padding: "20px 18px calc(env(safe-area-inset-bottom) + 24px)" }}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 22, color: C.text, textTransform: "uppercase", marginBottom: 4 }}>Settings</div>
+
+        <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint, letterSpacing: 1, margin: "18px 0 10px" }}>EQUIPMENT</div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim, marginBottom: 12, lineHeight: 1.5 }}>
+          Tell the agent what else you've got — it'll automatically work new options into your programming.
+        </div>
+        {items.map((it) => (
+          <button key={it.key} onClick={() => toggle(it.key)} style={{
+            width: "100%", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center",
+            background: local[it.key] ? C.hazardDim : C.bgCard, border: `1px solid ${local[it.key] ? C.hazard : C.line}`,
+            borderRadius: 8, padding: "10px 12px", marginBottom: 8, cursor: "pointer",
+          }}>
+            <div>
+              <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: local[it.key] ? C.hazard : C.text, fontSize: 15 }}>{it.label}</div>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.textFaint, marginTop: 2 }}>{it.detail}</div>
+            </div>
+            <CheckCircle2 size={18} color={local[it.key] ? C.hazard : C.textFaint} />
+          </button>
+        ))}
+        <button onClick={() => onSaveEquipment(local)} style={{ width: "100%", background: C.hazard, border: "none", borderRadius: 8, padding: "12px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", marginTop: 4 }}>
+          Save Equipment
+        </button>
+
+        <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint, letterSpacing: 1, margin: "26px 0 10px" }}>PROGRAM</div>
+        <button onClick={onReset} style={{ width: "100%", background: "none", border: `1px solid ${C.hazard}`, borderRadius: 8, padding: "12px", color: C.hazard, fontFamily: FONT_DISPLAY, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
+          Reset Program
+        </button>
+
+        <button onClick={onClose} style={{ width: "100%", background: "none", border: "none", color: C.textDim, fontFamily: FONT_MONO, fontSize: 13, padding: "16px 0 0", cursor: "pointer" }}>Close</button>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [profile, setProfile] = useState(undefined);
   const [logs, setLogs] = useState({});
   const [timerLogs, setTimerLogs] = useState([]);
+  const [equipment, setEquipment] = useState(DEFAULT_EQUIPMENT);
   const [week, setWeek] = useState(1);
   const [tab, setTab] = useState("program");
+  const [showSettings, setShowSettings] = useState(false);
+  const [timerContext, setTimerContext] = useState(null);
   const engine = useTimerEngine();
   useWakeLock();
 
@@ -1383,7 +1595,8 @@ function App() {
       const p = await loadKey("profile", null);
       const l = await loadKey("logs", {});
       const tl = await loadKey("timerLogs", []);
-      setProfile(p); setLogs(l || {}); setTimerLogs(tl || []);
+      const eq = await loadKey("equipment", DEFAULT_EQUIPMENT);
+      setProfile(p); setLogs(l || {}); setTimerLogs(tl || []); setEquipment({ ...DEFAULT_EQUIPMENT, ...(eq || {}) });
     })();
   }, []);
 
@@ -1392,6 +1605,12 @@ function App() {
     if (!window.confirm("Reset your program? This clears your 1RMs and logged sessions.")) return;
     setProfile(null); setLogs({}); setTimerLogs([]);
     await saveKey("profile", null); await saveKey("logs", {}); await saveKey("timerLogs", []);
+    setShowSettings(false);
+  };
+  const handleSaveEquipment = async (eq) => {
+    setEquipment(eq);
+    await saveKey("equipment", eq);
+    setShowSettings(false);
   };
 
   const saveEntry = useCallback((exId, entry) => {
@@ -1421,7 +1640,16 @@ function App() {
       saveKey("timerLogs", next);
       return next;
     });
+    setTimerContext(null);
     setTab("program");
+  };
+
+  // Jumps to the Timer tab pre-loaded with the workout you were looking at,
+  // so you can see the moves while the clock runs instead of flipping tabs.
+  const onTimeWorkout = (title, items) => {
+    setTimerContext({ title, items });
+    if (!engine.running) engine.setCfg((c) => ({ ...c, mode: "amrap", amrapMinutes: 12 }));
+    setTab("timer");
   };
 
   return (
@@ -1442,14 +1670,15 @@ function App() {
       ) : (
         <>
           {tab === "program" && (
-            <ProgramTab profile={profile} logs={logs} saveEntry={saveEntry} saveDayMeta={saveDayMeta} week={week} setWeek={setWeek} engine={engine} onOpenTimer={() => setTab("timer")} />
+            <ProgramTab profile={profile} logs={logs} equipment={equipment} saveEntry={saveEntry} saveDayMeta={saveDayMeta} week={week} setWeek={setWeek} engine={engine} onOpenTimer={() => setTab("timer")} onTimeWorkout={onTimeWorkout} />
           )}
-          {tab === "timer" && <TimerTab engine={engine} onLogResult={onLogTimerResult} />}
+          {tab === "timer" && <TimerTab engine={engine} onLogResult={onLogTimerResult} context={timerContext} onClearContext={() => setTimerContext(null)} />}
           {tab === "log" && <LogTab logs={logs} timerLogs={timerLogs} />}
           <TabBar tab={tab} setTab={setTab} timerActive={engine.running} />
-          <button onClick={handleReset} title="Reset program" style={{ position: "fixed", top: 14, right: 14, background: "none", border: "none", cursor: "pointer", zIndex: 25, opacity: 0.6 }}>
+          <button onClick={() => setShowSettings(true)} title="Settings" style={{ position: "fixed", top: "calc(env(safe-area-inset-top) + 14px)", right: 14, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 8, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", zIndex: 25 }}>
             <Settings size={16} color={C.textFaint} />
           </button>
+          {showSettings && <SettingsModal equipment={equipment} onSaveEquipment={handleSaveEquipment} onReset={handleReset} onClose={() => setShowSettings(false)} />}
         </>
       )}
     </div>
