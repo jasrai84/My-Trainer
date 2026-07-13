@@ -59,8 +59,8 @@ function MiniLineChart({ data }) {
         if (!pts) return null;
         return <polyline key={s.key} points={pts} fill="none" stroke={s.color} strokeWidth="2" />;
       })}
-      <text x={PAD} y={H - 6} fill="#6B7275" fontSize="10" fontFamily="'JetBrains Mono', monospace">W{minW}</text>
-      <text x={W - PAD} y={H - 6} textAnchor="end" fill="#6B7275" fontSize="10" fontFamily="'JetBrains Mono', monospace">W{maxW}</text>
+      <text x={PAD} y={H - 6} fill="#6B7275" fontSize="12" fontFamily="'JetBrains Mono', monospace">W{minW}</text>
+      <text x={W - PAD} y={H - 6} textAnchor="end" fill="#6B7275" fontSize="12" fontFamily="'JetBrains Mono', monospace">W{maxW}</text>
     </svg>
   );
 }
@@ -210,7 +210,19 @@ function seededShuffle(arr, seed) {
   return a;
 }
 
-const FINISHER_KEYS = ["ski", "sled", "rope", "kbSwing", "treadmill", "burpee"];
+// Auto-rotated pool sticks to indoor/limited-space moves (garage gym default).
+// Sled is left out of the automatic rotation — it needs open space — but stays
+// available as a manual pick via "Select New Workout" for days with room to set up outdoors.
+const AUTO_FINISHER_KEYS = ["ski", "rope", "kbSwing", "treadmill", "burpee"];
+const ALL_FINISHER_KEYS = [...AUTO_FINISHER_KEYS, "sled"];
+const FINISHER_META = {
+  ski: { label: "Ski Erg intervals", space: "Minimal space — indoor friendly" },
+  rope: { label: "Battle rope waves", space: "Minimal space — indoor friendly" },
+  kbSwing: { label: "Kettlebell swings", space: "Minimal space — indoor friendly" },
+  treadmill: { label: "Treadmill sprints", space: "Minimal space — indoor friendly" },
+  burpee: { label: "Burpee broad jumps", space: "Small clear floor area" },
+  sled: { label: "Sled push (Bulldog Saxon)", space: "Needs open space — garden/outdoors" },
+};
 function condShort(week, style) {
   const bump = Math.min(3, Math.floor(week / 6));
   const blocks = {
@@ -223,10 +235,10 @@ function condShort(week, style) {
   };
   return blocks[style];
 }
-// Deterministic-but-varied weekly assignment: shuffles the finisher pool with the
+// Deterministic-but-varied weekly assignment: shuffles the auto pool with the
 // week number as a seed, so it's different week to week but stable if you revisit a week.
 function weeklyFinisherAssignment(week) {
-  const order = seededShuffle(FINISHER_KEYS, week * 97 + 13);
+  const order = seededShuffle(AUTO_FINISHER_KEYS, week * 97 + 13);
   const days = ["mon", "tue", "thu", "fri"];
   const map = {};
   days.forEach((d, i) => (map[d] = order[i % order.length]));
@@ -300,6 +312,8 @@ function buildDaySession(dayKey, week, profile, logs) {
   const sets = deload ? Math.max(2, phase.sets - 1) : phase.sets;
   const finishers = weeklyFinisherAssignment(week);
   const warmup = dynamicWarmup(dayKey);
+  const override = logs[wKey(week)]?.days?.[dayKey]?.finisherOverride;
+  const finisherFor = (d) => override || finishers[d];
 
   const mkMain = (liftKey, name, equipment) => {
     const w = mainLiftWeight(profile, logs, liftKey, week);
@@ -316,7 +330,7 @@ function buildDaySession(dayKey, week, profile, logs) {
         mkAcc("speedpull", "Trap Bar Deadlift (light, speed pulls)", "25kg trap bar", 3, "5", dl ? roundBar(dl * 0.6) : null),
         mkAcc("stepup", "Weighted step-ups", "vest or dumbbells", 3, "10/leg"),
       ],
-      conditioning: condShort(week, finishers.mon),
+      conditioning: condShort(week, finisherFor("mon")), conditioningKey: finisherFor("mon"),
     };
   }
   if (dayKey === "tue") {
@@ -327,7 +341,7 @@ function buildDaySession(dayKey, week, profile, logs) {
         mkAcc("pullup", "Weighted pull-ups", "pull-up bar + dip belt", sets, "5-8"),
         mkAcc("dips", "Weighted dips", "dip bar + dip belt", 3, "8-10"),
       ],
-      conditioning: condShort(week, finishers.tue),
+      conditioning: condShort(week, finisherFor("tue")), conditioningKey: finisherFor("tue"),
     };
   }
   if (dayKey === "thu") {
@@ -338,7 +352,7 @@ function buildDaySession(dayKey, week, profile, logs) {
         mkAcc("rdl", "Single-leg RDL (DB)", "adjustable dumbbells", 3, "8/leg"),
         mkAcc("carry", "Farmer's carry", "trap bar or heavy dumbbells", 3, "40m"),
       ],
-      conditioning: condShort(week, finishers.thu),
+      conditioning: condShort(week, finisherFor("thu")), conditioningKey: finisherFor("thu"),
     };
   }
   if (dayKey === "fri") {
@@ -349,7 +363,7 @@ function buildDaySession(dayKey, week, profile, logs) {
         mkAcc("lunge", "Weighted walking lunges", "vest or dip belt", 3, "12/leg"),
         mkAcc("goblet", "KB goblet squat", `${nearestFrom(KB_WEIGHTS, 20)}kg kettlebell`, 3, "10"),
       ],
-      conditioning: condShort(week, finishers.fri),
+      conditioning: condShort(week, finisherFor("fri")), conditioningKey: finisherFor("fri"),
     };
   }
   if (dayKey === "sat") return { dayType: "Hyrox Simulation", warmup, sim: hyroxSimSession(week) };
@@ -369,16 +383,29 @@ async function saveKey(key, value) {
 /* =========================================================================
    SOUND
    ======================================================================= */
+let _audioCtx = null;
+function getAudioCtx() {
+  if (!_audioCtx) {
+    try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; }
+  }
+  if (_audioCtx.state === "suspended") _audioCtx.resume().catch(() => {});
+  return _audioCtx;
+}
 function beep(freq = 880, dur = 150, vol = 0.15) {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = getAudioCtx();
+    if (!ctx) return;
     const o = ctx.createOscillator(); const g = ctx.createGain();
     o.frequency.value = freq; o.connect(g); g.connect(ctx.destination);
     g.gain.setValueAtTime(vol, ctx.currentTime);
-    o.start(); o.stop(ctx.currentTime + dur / 1000);
-    setTimeout(() => ctx.close(), dur + 80);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur / 1000);
+    o.start(); o.stop(ctx.currentTime + dur / 1000 + 0.02);
   } catch (e) {}
 }
+// Short high pip — used for the 3-2-1 countdown cues.
+function pip() { beep(1000, 90, 0.14); }
+// Lower double-tone bell — used when a timer/phase hits zero.
+function bell() { beep(440, 320, 0.18); setTimeout(() => beep(440, 380, 0.18), 260); }
 
 /* =========================================================================
    SMALL UI PRIMITIVES
@@ -386,7 +413,7 @@ function beep(freq = 880, dur = 150, vol = 0.15) {
 function Pill({ children, tone = "hazard" }) {
   const bg = tone === "hazard" ? C.hazardDim : tone === "signal" ? C.signalDim : C.lineFaint;
   const fg = tone === "hazard" ? C.hazard : tone === "signal" ? C.signal : C.textDim;
-  return <span style={{ background: bg, color: fg, fontFamily: FONT_MONO, fontSize: 11, letterSpacing: 1, padding: "3px 8px", borderRadius: 3, textTransform: "uppercase", fontWeight: 700 }}>{children}</span>;
+  return <span style={{ background: bg, color: fg, fontFamily: FONT_MONO, fontSize: 13, letterSpacing: 1, padding: "3px 8px", borderRadius: 3, textTransform: "uppercase", fontWeight: 700 }}>{children}</span>;
 }
 function PlateStack({ level }) {
   const n = Math.max(1, Math.min(5, level));
@@ -435,34 +462,34 @@ function Onboarding({ onComplete }) {
   ];
   const canSubmit = form.squat && form.swissBench && form.trapDeadlift && form.ohp;
   return (
-    <div style={{ maxWidth: 480, margin: "0 auto", padding: "48px 20px" }}>
+    <div style={{ maxWidth: 480, margin: "0 auto", padding: "calc(env(safe-area-inset-top) + 40px) 20px 40px" }}>
       <div style={{ display: "flex", justifyContent: "center", marginBottom: 24 }}>
         <img src={APP_ICON} alt="My Trainer" style={{ width: 88, height: 88, borderRadius: 20 }} />
       </div>
       <div style={{ marginBottom: 32 }}>
-        <div style={{ fontFamily: FONT_MONO, color: C.hazard, fontSize: 12, letterSpacing: 2, marginBottom: 8 }}>SETUP · 01</div>
-        <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 34, color: C.text, margin: 0, textTransform: "uppercase", letterSpacing: 0.5 }}>Load your bar</h1>
-        <p style={{ fontFamily: FONT_BODY, color: C.textDim, fontSize: 14, lineHeight: 1.6, marginTop: 10 }}>
+        <div style={{ fontFamily: FONT_MONO, color: C.hazard, fontSize: 14, letterSpacing: 2, marginBottom: 8 }}>SETUP · 01</div>
+        <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 37, color: C.text, margin: 0, textTransform: "uppercase", letterSpacing: 0.5 }}>Load your bar</h1>
+        <p style={{ fontFamily: FONT_BODY, color: C.textDim, fontSize: 16, lineHeight: 1.6, marginTop: 10 }}>
           Enter your current best for each lift. The engine calculates every working weight for 26 weeks, and adjusts as you log sessions.
         </p>
       </div>
       {fields.map((f) => (
         <div key={f.k} style={{ marginBottom: 18 }}>
-          <label style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.text, fontWeight: 600, display: "block", marginBottom: 4 }}>{f.label}</label>
-          <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textFaint, marginBottom: 6 }}>{f.hint}</div>
+          <label style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.text, fontWeight: 600, display: "block", marginBottom: 4 }}>{f.label}</label>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: C.textFaint, marginBottom: 6 }}>{f.hint}</div>
           <input type="number" inputMode="decimal" value={form[f.k]} onChange={set(f.k)}
-            style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "12px 14px", color: C.text, fontFamily: FONT_MONO, fontSize: 16, boxSizing: "border-box", outline: "none" }}
+            style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "12px 14px", color: C.text, fontFamily: FONT_MONO, fontSize: 18, boxSizing: "border-box", outline: "none" }}
             onFocus={(e) => (e.target.style.borderColor = C.hazard)} onBlur={(e) => (e.target.style.borderColor = C.line)} placeholder="0" />
         </div>
       ))}
       <div style={{ marginBottom: 28 }}>
-        <label style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.text, fontWeight: 600, display: "block", marginBottom: 4 }}>Program start date</label>
+        <label style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.text, fontWeight: 600, display: "block", marginBottom: 4 }}>Program start date</label>
         <input type="date" value={form.startDate} onChange={set("startDate")}
-          style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "12px 14px", color: C.text, fontFamily: FONT_MONO, fontSize: 15, boxSizing: "border-box", outline: "none", colorScheme: "dark" }} />
+          style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "12px 14px", color: C.text, fontFamily: FONT_MONO, fontSize: 17, boxSizing: "border-box", outline: "none", colorScheme: "dark" }} />
       </div>
       <button disabled={!canSubmit}
         onClick={() => onComplete({ squat: parseFloat(form.squat), swissBench: parseFloat(form.swissBench), trapDeadlift: parseFloat(form.trapDeadlift), ohp: parseFloat(form.ohp), bodyweight: parseFloat(form.bodyweight) || null, startDate: form.startDate })}
-        style={{ width: "100%", padding: "14px", borderRadius: 6, border: "none", background: canSubmit ? C.hazard : C.lineFaint, color: canSubmit ? "#1A1A1A" : C.textFaint, fontFamily: FONT_DISPLAY, fontSize: 16, letterSpacing: 1, textTransform: "uppercase", cursor: canSubmit ? "pointer" : "not-allowed", fontWeight: 600 }}>
+        style={{ width: "100%", padding: "14px", borderRadius: 6, border: "none", background: canSubmit ? C.hazard : C.lineFaint, color: canSubmit ? "#1A1A1A" : C.textFaint, fontFamily: FONT_DISPLAY, fontSize: 18, letterSpacing: 1, textTransform: "uppercase", cursor: canSubmit ? "pointer" : "not-allowed", fontWeight: 600 }}>
         Build my program
       </button>
     </div>
@@ -472,6 +499,17 @@ function Onboarding({ onComplete }) {
 /* =========================================================================
    EXERCISE CARD — weight field, last-time reference, circular set tracker
    ======================================================================= */
+// Suggests a rest duration: heavier/lower-rep main lifts get longer rest than accessory work.
+function recommendRestSeconds(ex) {
+  const low = parseInt(String(ex.reps || "8").split(/[-\/]/)[0], 10) || 8;
+  if (ex.liftKey) {
+    if (low <= 3) return 180;
+    if (low <= 5) return 150;
+    return 120;
+  }
+  return low <= 5 ? 90 : 60;
+}
+
 function ExerciseCard({ ex, week, logs, dayType, onSave }) {
   const wk = wKey(week);
   const existing = logs[wk]?.entries?.[ex.id];
@@ -481,6 +519,15 @@ function ExerciseCard({ ex, week, logs, dayType, onSave }) {
   const [rpe, setRpe] = useState(existing?.rpe ?? "");
   const [done, setDone] = useState(existing?.setsCompleted ?? Array(ex.sets).fill(false));
   const [showScale, setShowScale] = useState(false);
+  const [restRemaining, setRestRemaining] = useState(null);
+
+  useEffect(() => {
+    if (restRemaining == null) return;
+    if (restRemaining <= 0) { bell(); setRestRemaining(null); return; }
+    if (restRemaining <= 3) pip();
+    const id = setTimeout(() => setRestRemaining((r) => (r == null ? null : r - 1)), 1000);
+    return () => clearTimeout(id);
+  }, [restRemaining]);
 
   useEffect(() => {
     // reset local state when navigating to a different week/exercise
@@ -500,34 +547,40 @@ function ExerciseCard({ ex, week, logs, dayType, onSave }) {
   };
 
   const toggleSet = (i) => {
+    const wasDone = done[i];
     const next = [...done]; next[i] = !next[i]; setDone(next);
     persist(next, weight, rpe);
+    if (!wasDone && next[i] && next.filter(Boolean).length < ex.sets) {
+      setRestRemaining(recommendRestSeconds(ex));
+    } else if (wasDone) {
+      setRestRemaining(null); // un-checking a set cancels any running rest
+    }
   };
   const completedCount = done.filter(Boolean).length;
 
   return (
     <div style={{ background: C.bgCard, border: `1px solid ${completedCount === ex.sets ? C.hazardDim : C.line}`, borderRadius: 8, padding: 14, marginBottom: 10 }}>
-      <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 15 }}>{ex.name}</div>
-      {ex.equipment && <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, marginTop: 2 }}>{ex.equipment}</div>}
-      <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textDim, marginTop: 6 }}>
+      <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 17 }}>{ex.name}</div>
+      {ex.equipment && <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, marginTop: 2 }}>{ex.equipment}</div>}
+      <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.textDim, marginTop: 6 }}>
         {ex.sets} × {ex.reps} {ex.weightKg != null ? `— target ${fmtKg(ex.weightKg)}kg` : ""}
       </div>
-      {ex.note && <div style={{ fontFamily: FONT_BODY, fontSize: 11, color: C.signal, marginTop: 4 }}>{ex.note}</div>}
-      <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, marginTop: 4 }}>
+      {ex.note && <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.signal, marginTop: 4 }}>{ex.note}</div>}
+      <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, marginTop: 4 }}>
         Last time: {last ? `${fmtKg(last.weight)}kg (week ${last.week})` : "—"}
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.textFaint, marginBottom: 3 }}>WEIGHT (KG)</div>
+          <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint, marginBottom: 3 }}>WEIGHT (KG)</div>
           <input type="number" value={weight}
             onChange={(e) => setWeight(e.target.value)}
             onBlur={() => persist(done, weight, rpe)}
-            style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontFamily: FONT_MONO, fontSize: 14, boxSizing: "border-box", outline: "none" }} />
+            style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontFamily: FONT_MONO, fontSize: 16, boxSizing: "border-box", outline: "none" }} />
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 3 }}>
-            <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.textFaint }}>RPE (1-10)</div>
+            <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint }}>RPE (1-10)</div>
             <button onClick={() => setShowScale((s) => !s)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", alignItems: "center" }}>
               <HelpCircle size={12} color={showScale ? C.hazard : C.textFaint} />
             </button>
@@ -535,7 +588,7 @@ function ExerciseCard({ ex, week, logs, dayType, onSave }) {
           <input type="number" min="1" max="10" value={rpe}
             onChange={(e) => setRpe(e.target.value)}
             onBlur={() => persist(done, weight, rpe)}
-            style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontFamily: FONT_MONO, fontSize: 14, boxSizing: "border-box", outline: "none" }} />
+            style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontFamily: FONT_MONO, fontSize: 16, boxSizing: "border-box", outline: "none" }} />
         </div>
       </div>
 
@@ -543,26 +596,39 @@ function ExerciseCard({ ex, week, logs, dayType, onSave }) {
         <div style={{ background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", marginTop: 8 }}>
           {RPE_SCALE.map((r) => (
             <div key={r.v} style={{ display: "flex", gap: 8, padding: "3px 0" }}>
-              <span style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.hazard, fontWeight: 700, width: 24, flexShrink: 0 }}>{r.v}</span>
-              <span style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.textDim, lineHeight: 1.4 }}>{r.d}</span>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.hazard, fontWeight: 700, width: 24, flexShrink: 0 }}>{r.v}</span>
+              <span style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: C.textDim, lineHeight: 1.4 }}>{r.d}</span>
             </div>
           ))}
         </div>
       )}
 
       <div style={{ marginTop: 12 }}>
-        <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.textFaint, marginBottom: 6 }}>SETS · {completedCount}/{ex.sets} DONE</div>
+        <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint, marginBottom: 6 }}>SETS · {completedCount}/{ex.sets} DONE</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {done.map((d, i) => (
             <button key={i} onClick={() => toggleSet(i)} style={{
               width: 34, height: 34, borderRadius: "50%", border: `2px solid ${d ? C.hazard : C.line}`,
               background: d ? C.hazard : "transparent", cursor: "pointer",
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontFamily: FONT_MONO, fontSize: 13, color: d ? "#1A1A1A" : C.textDim, fontWeight: 700,
+              fontFamily: FONT_MONO, fontSize: 15, color: d ? "#1A1A1A" : C.textDim, fontWeight: 700,
             }}>{i + 1}</button>
           ))}
         </div>
       </div>
+
+      {restRemaining != null && (
+        <div style={{ background: C.signalDim, border: `1px solid ${C.signal}`, borderRadius: 8, padding: 12, marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.signal, letterSpacing: 1 }}>REST</div>
+            <div style={{ fontFamily: FONT_DISPLAY, fontSize: 30, color: C.text }}>{fmtTime(restRemaining)}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setRestRemaining((r) => (r || 0) + 30)} style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 12px", color: C.text, fontFamily: FONT_MONO, fontSize: 13, cursor: "pointer" }}>+30s</button>
+            <button onClick={() => setRestRemaining(null)} style={{ background: "none", border: `1px solid ${C.line}`, borderRadius: 6, padding: "8px 12px", color: C.textDim, fontFamily: FONT_MONO, fontSize: 13, cursor: "pointer" }}>Skip</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -571,15 +637,15 @@ function SimBlock({ sim }) {
   return (
     <div>
       <div style={{ background: C.signalDim, border: `1px solid ${C.signal}`, borderRadius: 8, padding: 14, marginBottom: 12 }}>
-        <div style={{ fontFamily: FONT_DISPLAY, color: C.signal, fontSize: 16, textTransform: "uppercase", letterSpacing: 0.5 }}>{sim.title}</div>
-        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.text, marginTop: 6, lineHeight: 1.5 }}>{sim.intro}</div>
+        <div style={{ fontFamily: FONT_DISPLAY, color: C.signal, fontSize: 18, textTransform: "uppercase", letterSpacing: 0.5 }}>{sim.title}</div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.text, marginTop: 6, lineHeight: 1.5 }}>{sim.intro}</div>
       </div>
       {sim.stations.map((s, i) => (
         <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 0", borderBottom: `1px solid ${C.lineFaint}` }}>
-          <div style={{ fontFamily: FONT_MONO, color: C.textFaint, fontSize: 12, width: 20 }}>{i + 1}</div>
+          <div style={{ fontFamily: FONT_MONO, color: C.textFaint, fontSize: 14, width: 20 }}>{i + 1}</div>
           <div>
-            <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 14 }}>{s.name}</div>
-            <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textDim, marginTop: 2 }}>{s.detail}</div>
+            <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 16 }}>{s.name}</div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: C.textDim, marginTop: 2 }}>{s.detail}</div>
           </div>
         </div>
       ))}
@@ -625,8 +691,11 @@ function useTimerEngine() {
     emomIntervalSec: 60, emomRounds: 10,
     tabataWorkSec: 20, tabataRestSec: 10, tabataRounds: 8,
     mixRounds: 1, mixIntervals: [{ label: "Work", seconds: 40 }, { label: "Rest", seconds: 20 }],
+    forTimeCapMinutes: 0, // 0 = no cap
   });
   const [running, setRunning] = useState(false);
+  const [preCounting, setPreCounting] = useState(false);
+  const [preRemaining, setPreRemaining] = useState(10);
   const [phaseIdx, setPhaseIdx] = useState(0);
   const [phaseRemaining, setPhaseRemaining] = useState(0);
   const [elapsed, setElapsed] = useState(0);
@@ -634,41 +703,72 @@ function useTimerEngine() {
   const [finished, setFinished] = useState(false);
   const phasesRef = useRef([]);
 
-  const start = () => {
+  const actuallyStart = () => {
     if (cfg.mode === "fortime") {
-      setElapsed(0); setFinished(false); setRunning(true); beep(880, 200); return;
+      setElapsed(0); setFinished(false); setRunning(true); bell(); return;
     }
     const phases = buildPhases(cfg);
     phasesRef.current = phases;
     setPhaseIdx(0);
     setPhaseRemaining(phases[0]?.seconds || 0);
     setElapsed(0); setRounds(0); setFinished(false); setRunning(true);
-    beep(880, 200);
+    bell();
   };
+
+  // Public start(): kicks off a 10-second "get ready" countdown with 3-2-1 pips,
+  // then hands off to actuallyStart() once it hits zero.
+  const start = () => {
+    getAudioCtx(); // unlock/create audio context inside this user-gesture tap
+    setPreRemaining(10);
+    setPreCounting(true);
+  };
+  const skipPreCountdown = () => { setPreCounting(false); actuallyStart(); };
   const pause = () => setRunning(false);
   const resume = () => setRunning(true);
   const reset = () => {
-    setRunning(false); setFinished(false); setElapsed(0); setRounds(0); setPhaseIdx(0);
+    setRunning(false); setPreCounting(false); setFinished(false); setElapsed(0); setRounds(0); setPhaseIdx(0);
     setPhaseRemaining((buildPhases(cfg)[0] || {}).seconds || 0);
   };
+
+  // Pre-start countdown ticker
+  useEffect(() => {
+    if (!preCounting) return;
+    if (preRemaining <= 0) { setPreCounting(false); actuallyStart(); return; }
+    if (preRemaining <= 3) pip();
+    const id = setTimeout(() => setPreRemaining((r) => r - 1), 1000);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preCounting, preRemaining]);
 
   useEffect(() => {
     if (!running) return;
     const id = setInterval(() => {
-      if (cfg.mode === "fortime") { setElapsed((e) => e + 1); return; }
+      if (cfg.mode === "fortime") {
+        setElapsed((e) => {
+          const next = e + 1;
+          const cap = cfg.forTimeCapMinutes > 0 ? cfg.forTimeCapMinutes * 60 : null;
+          if (cap != null) {
+            const remaining = cap - next;
+            if (remaining > 0 && remaining <= 3) pip();
+            if (remaining <= 0) { setRunning(false); setFinished(true); bell(); }
+          }
+          return next;
+        });
+        return;
+      }
       setPhaseRemaining((r) => {
         if (r <= 1) {
           const phases = phasesRef.current;
           const nextIdx = phaseIdx + 1;
+          bell();
           if (nextIdx >= phases.length) {
-            setRunning(false); setFinished(true); beep(1046, 400); beep(1046, 400);
+            setRunning(false); setFinished(true);
             return 0;
           }
           setPhaseIdx(nextIdx);
-          beep(phases[nextIdx].kind === "rest" ? 523 : 784, 180);
           return phases[nextIdx].seconds;
         }
-        if (r <= 4) beep(660, 80, 0.08);
+        if (r <= 4) pip();
         return r - 1;
       });
       setElapsed((e) => e + 1);
@@ -680,7 +780,7 @@ function useTimerEngine() {
   const phases = cfg.mode === "fortime" ? [] : buildPhases(cfg);
   const currentPhase = phases[phaseIdx];
 
-  return { cfg, setCfg, running, start, pause, resume, reset, phaseIdx, phaseRemaining, elapsed, rounds, setRounds, finished, phases, currentPhase };
+  return { cfg, setCfg, running, start, skipPreCountdown, pause, resume, reset, preCounting, preRemaining, phaseIdx, phaseRemaining, elapsed, rounds, setRounds, finished, phases, currentPhase };
 }
 
 function MiniTimerBar({ engine, onOpen }) {
@@ -695,22 +795,22 @@ function MiniTimerBar({ engine, onOpen }) {
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <TimerIcon size={16} color={finished ? C.hazard : C.signal} />
-        <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.text, letterSpacing: 0.5 }}>
+        <span style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.text, letterSpacing: 0.5 }}>
           {TIMER_MODES.find((m) => m.id === cfg.mode)?.label}{currentPhase ? ` · ${currentPhase.label}` : ""}{finished ? " · DONE" : ""}
         </span>
       </div>
-      <span style={{ fontFamily: FONT_MONO, fontSize: 18, color: C.text, fontWeight: 700 }}>{display}</span>
+      <span style={{ fontFamily: FONT_MONO, fontSize: 20, color: C.text, fontWeight: 700 }}>{display}</span>
     </button>
   );
 }
 
 function TimerTab({ engine, onLogResult }) {
-  const { cfg, setCfg, running, start, pause, resume, reset, phaseRemaining, elapsed, rounds, setRounds, finished, currentPhase } = engine;
+  const { cfg, setCfg, running, start, skipPreCountdown, pause, resume, reset, preCounting, preRemaining, phaseRemaining, elapsed, rounds, setRounds, finished, currentPhase } = engine;
   const [label, setLabel] = useState("");
 
   const numInput = (val, onChange, w = 70) => (
     <input type="number" value={val} onChange={(e) => onChange(parseInt(e.target.value) || 0)}
-      style={{ width: w, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontFamily: FONT_MONO, fontSize: 14, textAlign: "center", outline: "none" }} />
+      style={{ width: w, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontFamily: FONT_MONO, fontSize: 16, textAlign: "center", outline: "none" }} />
   );
 
   const saveResult = () => {
@@ -722,10 +822,21 @@ function TimerTab({ engine, onLogResult }) {
 
   const isIdle = !running && elapsed === 0 && !finished;
 
+  if (preCounting) {
+    return (
+      <div style={{ maxWidth: 560, margin: "0 auto", padding: "calc(env(safe-area-inset-top) + 36px) 16px 100px", textAlign: "center" }}>
+        <div style={{ fontFamily: FONT_MONO, color: C.signal, fontSize: 14, letterSpacing: 2, marginBottom: 10 }}>GET READY</div>
+        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 120, color: C.text, lineHeight: 1 }}>{preRemaining}</div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.textDim, marginTop: 12 }}>{TIMER_MODES.find((m) => m.id === cfg.mode)?.label} starts in a few seconds…</div>
+        <button onClick={skipPreCountdown} style={{ marginTop: 28, background: "none", border: `1px solid ${C.line}`, borderRadius: 8, padding: "10px 22px", color: C.textDim, fontFamily: FONT_DISPLAY, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>Skip</button>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ maxWidth: 560, margin: "0 auto", padding: "20px 16px 100px" }}>
-      <div style={{ fontFamily: FONT_MONO, color: C.hazard, fontSize: 12, letterSpacing: 2, marginBottom: 4 }}>TIMER</div>
-      <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 28, color: C.text, margin: "0 0 16px", textTransform: "uppercase" }}>Work the clock</h1>
+    <div style={{ maxWidth: 560, margin: "0 auto", padding: "calc(env(safe-area-inset-top) + 36px) 16px 100px" }}>
+      <div style={{ fontFamily: FONT_MONO, color: C.hazard, fontSize: 14, letterSpacing: 2, marginBottom: 4 }}>TIMER</div>
+      <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 31, color: C.text, margin: "0 0 16px", textTransform: "uppercase" }}>Work the clock</h1>
 
       <div style={{ display: "flex", gap: 6, marginBottom: 18, flexWrap: "wrap" }}>
         {TIMER_MODES.map((m) => (
@@ -733,7 +844,7 @@ function TimerTab({ engine, onLogResult }) {
             style={{
               padding: "8px 12px", borderRadius: 6, border: `1px solid ${cfg.mode === m.id ? C.hazard : C.line}`,
               background: cfg.mode === m.id ? C.hazardDim : C.bgCard, color: cfg.mode === m.id ? C.hazard : C.textDim,
-              fontFamily: FONT_MONO, fontSize: 12, letterSpacing: 0.5, cursor: running ? "default" : "pointer", opacity: running ? 0.6 : 1,
+              fontFamily: FONT_MONO, fontSize: 14, letterSpacing: 0.5, cursor: running ? "default" : "pointer", opacity: running ? 0.6 : 1,
             }}>{m.label}</button>
         ))}
       </div>
@@ -742,24 +853,31 @@ function TimerTab({ engine, onLogResult }) {
         <div style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 10, padding: 16, marginBottom: 18 }}>
           {cfg.mode === "amrap" && (
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim }}>Minutes</span>
+              <span style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.textDim }}>Minutes</span>
               {numInput(cfg.amrapMinutes, (v) => setCfg((c) => ({ ...c, amrapMinutes: v })))}
             </div>
           )}
           {cfg.mode === "fortime" && (
-            <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim }}>Stopwatch counts up from zero. Stop it when you finish the work — great for benchmark Hyrox-style pieces.</div>
+            <div>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.textDim, marginBottom: 12 }}>Stopwatch counts up from zero. Stop it when you finish the work — great for benchmark Hyrox-style pieces.</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.textDim }}>Time cap (optional)</span>
+                {numInput(cfg.forTimeCapMinutes, (v) => setCfg((c) => ({ ...c, forTimeCapMinutes: v })))}
+                <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint }}>min, 0 = no cap</span>
+              </div>
+            </div>
           )}
           {cfg.mode === "emom" && (
             <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-              <div><div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, marginBottom: 4 }}>SECONDS/ROUND</div>{numInput(cfg.emomIntervalSec, (v) => setCfg((c) => ({ ...c, emomIntervalSec: v })))}</div>
-              <div><div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, marginBottom: 4 }}>ROUNDS</div>{numInput(cfg.emomRounds, (v) => setCfg((c) => ({ ...c, emomRounds: v })))}</div>
+              <div><div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, marginBottom: 4 }}>SECONDS/ROUND</div>{numInput(cfg.emomIntervalSec, (v) => setCfg((c) => ({ ...c, emomIntervalSec: v })))}</div>
+              <div><div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, marginBottom: 4 }}>ROUNDS</div>{numInput(cfg.emomRounds, (v) => setCfg((c) => ({ ...c, emomRounds: v })))}</div>
             </div>
           )}
           {cfg.mode === "tabata" && (
             <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-              <div><div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, marginBottom: 4 }}>WORK (S)</div>{numInput(cfg.tabataWorkSec, (v) => setCfg((c) => ({ ...c, tabataWorkSec: v })))}</div>
-              <div><div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, marginBottom: 4 }}>REST (S)</div>{numInput(cfg.tabataRestSec, (v) => setCfg((c) => ({ ...c, tabataRestSec: v })))}</div>
-              <div><div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, marginBottom: 4 }}>ROUNDS</div>{numInput(cfg.tabataRounds, (v) => setCfg((c) => ({ ...c, tabataRounds: v })))}</div>
+              <div><div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, marginBottom: 4 }}>WORK (S)</div>{numInput(cfg.tabataWorkSec, (v) => setCfg((c) => ({ ...c, tabataWorkSec: v })))}</div>
+              <div><div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, marginBottom: 4 }}>REST (S)</div>{numInput(cfg.tabataRestSec, (v) => setCfg((c) => ({ ...c, tabataRestSec: v })))}</div>
+              <div><div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, marginBottom: 4 }}>ROUNDS</div>{numInput(cfg.tabataRounds, (v) => setCfg((c) => ({ ...c, tabataRounds: v })))}</div>
             </div>
           )}
           {cfg.mode === "mix" && (
@@ -767,20 +885,20 @@ function TimerTab({ engine, onLogResult }) {
               {cfg.mixIntervals.map((iv, i) => (
                 <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
                   <input value={iv.label} onChange={(e) => { const arr = [...cfg.mixIntervals]; arr[i] = { ...iv, label: e.target.value }; setCfg((c) => ({ ...c, mixIntervals: arr })); }}
-                    placeholder="Label" style={{ flex: 1, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontFamily: FONT_BODY, fontSize: 13, outline: "none" }} />
+                    placeholder="Label" style={{ flex: 1, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 5, padding: "8px 10px", color: C.text, fontFamily: FONT_BODY, fontSize: 15, outline: "none" }} />
                   {numInput(iv.seconds, (v) => { const arr = [...cfg.mixIntervals]; arr[i] = { ...iv, seconds: v }; setCfg((c) => ({ ...c, mixIntervals: arr })); })}
-                  <span style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint }}>sec</span>
+                  <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint }}>sec</span>
                   <button onClick={() => setCfg((c) => ({ ...c, mixIntervals: c.mixIntervals.filter((_, idx) => idx !== i) }))} style={{ background: "none", border: "none", cursor: "pointer" }}><Trash2 size={15} color={C.textFaint} /></button>
                 </div>
               ))}
               <button onClick={() => setCfg((c) => ({ ...c, mixIntervals: [...c.mixIntervals, { label: "Interval", seconds: 30 }] }))}
-                style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: `1px dashed ${C.line}`, borderRadius: 6, padding: "6px 10px", color: C.textDim, fontFamily: FONT_MONO, fontSize: 12, cursor: "pointer", marginTop: 4 }}>
+                style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: `1px dashed ${C.line}`, borderRadius: 6, padding: "6px 10px", color: C.textDim, fontFamily: FONT_MONO, fontSize: 14, cursor: "pointer", marginTop: 4 }}>
                 <Plus size={13} /> Add interval
               </button>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
-                <span style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim }}>Repeat sequence</span>
+                <span style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.textDim }}>Repeat sequence</span>
                 {numInput(cfg.mixRounds, (v) => setCfg((c) => ({ ...c, mixRounds: v })), 50)}
-                <span style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim }}>times</span>
+                <span style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.textDim }}>times</span>
               </div>
             </div>
           )}
@@ -790,17 +908,17 @@ function TimerTab({ engine, onLogResult }) {
       {/* big display */}
       <div style={{ textAlign: "center", padding: "24px 0" }}>
         {currentPhase && cfg.mode !== "fortime" && (
-          <div style={{ fontFamily: FONT_MONO, color: currentPhase.kind === "rest" ? C.signal : C.hazard, fontSize: 13, letterSpacing: 2, marginBottom: 6 }}>{currentPhase.label.toUpperCase()}</div>
+          <div style={{ fontFamily: FONT_MONO, color: currentPhase.kind === "rest" ? C.signal : C.hazard, fontSize: 15, letterSpacing: 2, marginBottom: 6 }}>{currentPhase.label.toUpperCase()}</div>
         )}
-        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 72, color: C.text, letterSpacing: 1 }}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 80, color: C.text, letterSpacing: 1 }}>
           {cfg.mode === "fortime" ? fmtTime(elapsed) : fmtTime(phaseRemaining)}
         </div>
-        {finished && <div style={{ fontFamily: FONT_MONO, color: C.hazard, fontSize: 14, letterSpacing: 1, marginTop: 6 }}>FINISHED</div>}
+        {finished && <div style={{ fontFamily: FONT_MONO, color: C.hazard, fontSize: 16, letterSpacing: 1, marginTop: 6 }}>FINISHED</div>}
 
         {cfg.mode === "amrap" && (running || elapsed > 0) && (
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginTop: 16 }}>
             <button onClick={() => setRounds((r) => Math.max(0, r - 1))} style={{ width: 40, height: 40, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer" }}><Minus size={16} color={C.text} style={{ margin: "auto" }} /></button>
-            <div style={{ fontFamily: FONT_MONO, color: C.text, fontSize: 20 }}>{rounds} <span style={{ fontSize: 11, color: C.textFaint }}>ROUNDS</span></div>
+            <div style={{ fontFamily: FONT_MONO, color: C.text, fontSize: 22 }}>{rounds} <span style={{ fontSize: 13, color: C.textFaint }}>ROUNDS</span></div>
             <button onClick={() => setRounds((r) => r + 1)} style={{ width: 40, height: 40, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer" }}><Plus size={16} color={C.text} style={{ margin: "auto" }} /></button>
           </div>
         )}
@@ -808,25 +926,25 @@ function TimerTab({ engine, onLogResult }) {
 
       <div style={{ display: "flex", gap: 10, justifyContent: "center", marginBottom: 20 }}>
         {!running && !finished && (
-          <button onClick={start} style={{ display: "flex", alignItems: "center", gap: 6, background: C.hazard, border: "none", borderRadius: 8, padding: "12px 24px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}><Play size={16} /> Start</button>
+          <button onClick={start} style={{ display: "flex", alignItems: "center", gap: 6, background: C.hazard, border: "none", borderRadius: 8, padding: "12px 24px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}><Play size={16} /> Start</button>
         )}
         {running && (
-          <button onClick={pause} style={{ display: "flex", alignItems: "center", gap: 6, background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 24px", color: C.text, fontFamily: FONT_DISPLAY, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}><Pause size={16} /> Pause</button>
+          <button onClick={pause} style={{ display: "flex", alignItems: "center", gap: 6, background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 24px", color: C.text, fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}><Pause size={16} /> Pause</button>
         )}
         {!running && elapsed > 0 && !finished && (
-          <button onClick={resume} style={{ display: "flex", alignItems: "center", gap: 6, background: C.hazard, border: "none", borderRadius: 8, padding: "12px 24px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}><Play size={16} /> Resume</button>
+          <button onClick={resume} style={{ display: "flex", alignItems: "center", gap: 6, background: C.hazard, border: "none", borderRadius: 8, padding: "12px 24px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}><Play size={16} /> Resume</button>
         )}
         {(elapsed > 0 || finished) && (
-          <button onClick={reset} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 18px", color: C.textDim, fontFamily: FONT_DISPLAY, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}><RotateCcw size={16} /></button>
+          <button onClick={reset} style={{ display: "flex", alignItems: "center", gap: 6, background: "none", border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 18px", color: C.textDim, fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}><RotateCcw size={16} /></button>
         )}
       </div>
 
       {(elapsed > 0 || finished) && (
         <div style={{ background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14 }}>
-          <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, marginBottom: 8 }}>SAVE THIS RESULT TO YOUR LOG</div>
+          <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, marginBottom: 8 }}>SAVE THIS RESULT TO YOUR LOG</div>
           <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Saturday Hyrox sim, Ski Erg finisher…"
-            style={{ width: "100%", background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_BODY, fontSize: 13, boxSizing: "border-box", outline: "none", marginBottom: 10 }} />
-          <button onClick={saveResult} style={{ width: "100%", background: C.hazard, border: "none", borderRadius: 6, padding: "10px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 14, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>Save to log</button>
+            style={{ width: "100%", background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_BODY, fontSize: 15, boxSizing: "border-box", outline: "none", marginBottom: 10 }} />
+          <button onClick={saveResult} style={{ width: "100%", background: C.hazard, border: "none", borderRadius: 6, padding: "10px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 16, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>Save to log</button>
         </div>
       )}
     </div>
@@ -865,12 +983,12 @@ function CalendarView({ completedDays }) {
     <div style={{ background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, marginBottom: 20 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
         <button onClick={() => setMonthDate(new Date(year, month - 1, 1))} style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 6, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><ChevronLeft size={14} color={C.text} /></button>
-        <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.text, letterSpacing: 1 }}>{monthLabel.toUpperCase()}</div>
+        <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.text, letterSpacing: 1 }}>{monthLabel.toUpperCase()}</div>
         <button onClick={() => setMonthDate(new Date(year, month + 1, 1))} style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 6, width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}><ChevronRight size={14} color={C.text} /></button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 4 }}>
         {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => (
-          <div key={i} style={{ textAlign: "center", fontFamily: FONT_MONO, fontSize: 10, color: C.textFaint }}>{d}</div>
+          <div key={i} style={{ textAlign: "center", fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint }}>{d}</div>
         ))}
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
@@ -883,7 +1001,7 @@ function CalendarView({ completedDays }) {
           return (
             <div key={i} title={dayEntries ? dayEntries.map((e) => e.dayType).join(", ") : undefined}
               style={{ aspectRatio: "1", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 6, background: dayEntries ? C.hazardDim : "transparent", border: isToday ? `1px solid ${C.signal}` : "1px solid transparent" }}>
-              <span style={{ fontFamily: FONT_MONO, fontSize: 12, color: dayEntries ? C.hazard : C.textDim, fontWeight: dayEntries ? 700 : 400 }}>{d}</span>
+              <span style={{ fontFamily: FONT_MONO, fontSize: 14, color: dayEntries ? C.hazard : C.textDim, fontWeight: dayEntries ? 700 : 400 }}>{d}</span>
             </div>
           );
         })}
@@ -920,9 +1038,9 @@ function LogTab({ logs, timerLogs }) {
   }, [logs]);
 
   return (
-    <div style={{ maxWidth: 560, margin: "0 auto", padding: "20px 16px 100px" }}>
-      <div style={{ fontFamily: FONT_MONO, color: C.hazard, fontSize: 12, letterSpacing: 2, marginBottom: 4 }}>LOG</div>
-      <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 28, color: C.text, margin: "0 0 16px", textTransform: "uppercase" }}>Your progress</h1>
+    <div style={{ maxWidth: 560, margin: "0 auto", padding: "calc(env(safe-area-inset-top) + 36px) 16px 100px" }}>
+      <div style={{ fontFamily: FONT_MONO, color: C.hazard, fontSize: 14, letterSpacing: 2, marginBottom: 4 }}>LOG</div>
+      <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 31, color: C.text, margin: "0 0 16px", textTransform: "uppercase" }}>Your progress</h1>
 
       <CalendarView completedDays={completedDays} />
 
@@ -930,20 +1048,20 @@ function LogTab({ logs, timerLogs }) {
         <div style={{ background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, marginBottom: 20 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
             <TrendingUp size={14} color={C.hazard} />
-            <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.text, letterSpacing: 1 }}>MAIN LIFTS</div>
+            <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.text, letterSpacing: 1 }}>MAIN LIFTS</div>
           </div>
           <MiniLineChart data={chartData} />
         </div>
       )}
 
-      <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, letterSpacing: 1, marginBottom: 10 }}>EXERCISE HISTORY</div>
-      {Object.keys(byExercise).length === 0 && <div style={{ fontFamily: FONT_BODY, color: C.textFaint, fontSize: 13, marginBottom: 20 }}>Nothing logged yet — complete a session to see progression here.</div>}
+      <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, letterSpacing: 1, marginBottom: 10 }}>EXERCISE HISTORY</div>
+      {Object.keys(byExercise).length === 0 && <div style={{ fontFamily: FONT_BODY, color: C.textFaint, fontSize: 15, marginBottom: 20 }}>Nothing logged yet — complete a session to see progression here.</div>}
       {Object.entries(byExercise).map(([name, arr]) => (
         <div key={name} style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: 14, marginBottom: 10 }}>
-          <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 14, marginBottom: 6 }}>{name}</div>
+          <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 16, marginBottom: 6 }}>{name}</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {arr.map((e, i) => (
-              <span key={i} style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textDim, background: C.bgRaised, padding: "4px 8px", borderRadius: 4 }}>
+              <span key={i} style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textDim, background: C.bgRaised, padding: "4px 8px", borderRadius: 4 }}>
                 W{e.week}: {fmtKg(e.weight)}kg
               </span>
             ))}
@@ -951,15 +1069,15 @@ function LogTab({ logs, timerLogs }) {
         </div>
       ))}
 
-      <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, letterSpacing: 1, margin: "24px 0 10px" }}>CONDITIONING TIMES</div>
-      {(!timerLogs || timerLogs.length === 0) && <div style={{ fontFamily: FONT_BODY, color: C.textFaint, fontSize: 13 }}>No timed sessions logged yet.</div>}
+      <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, letterSpacing: 1, margin: "24px 0 10px" }}>CONDITIONING TIMES</div>
+      {(!timerLogs || timerLogs.length === 0) && <div style={{ fontFamily: FONT_BODY, color: C.textFaint, fontSize: 15 }}>No timed sessions logged yet.</div>}
       {(timerLogs || []).slice().reverse().map((t, i) => (
         <div key={i} style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 13 }}>{t.label}</div>
-            <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, marginTop: 2 }}>{TIMER_MODES.find((m) => m.id === t.mode)?.label} · {new Date(t.date).toLocaleDateString()}</div>
+            <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 15 }}>{t.label}</div>
+            <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, marginTop: 2 }}>{TIMER_MODES.find((m) => m.id === t.mode)?.label} · {new Date(t.date).toLocaleDateString()}</div>
           </div>
-          <div style={{ fontFamily: FONT_MONO, fontSize: 15, color: C.hazard, fontWeight: 700 }}>{t.result}</div>
+          <div style={{ fontFamily: FONT_MONO, fontSize: 17, color: C.hazard, fontWeight: 700 }}>{t.result}</div>
         </div>
       ))}
     </div>
@@ -974,15 +1092,15 @@ function WarmupBlock({ warmup }) {
   const totalSec = warmup.reduce((s, w) => s + w.seconds, 0);
   return (
     <div style={{ marginBottom: 18 }}>
-      <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, letterSpacing: 1, marginBottom: 8 }}>
+      <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, letterSpacing: 1, marginBottom: 8 }}>
         WARM-UP · {Math.round(totalSec / 60)} MIN
       </div>
       {warmup.map((w, i) => (
         <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 0", borderBottom: i < warmup.length - 1 ? `1px solid ${C.lineFaint}` : "none" }}>
-          <div style={{ fontFamily: FONT_MONO, color: C.signal, fontSize: 11, width: 34, flexShrink: 0, paddingTop: 1 }}>{fmtTime(w.seconds)}</div>
+          <div style={{ fontFamily: FONT_MONO, color: C.signal, fontSize: 13, width: 34, flexShrink: 0, paddingTop: 1 }}>{fmtTime(w.seconds)}</div>
           <div>
-            <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 13 }}>{w.name}</div>
-            <div style={{ fontFamily: FONT_BODY, fontSize: 11.5, color: C.textDim, marginTop: 1 }}>{w.detail}</div>
+            <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 15 }}>{w.name}</div>
+            <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: C.textDim, marginTop: 1 }}>{w.detail}</div>
           </div>
         </div>
       ))}
@@ -993,10 +1111,53 @@ function WarmupBlock({ warmup }) {
 /* =========================================================================
    PROGRAM TAB (dashboard + session)
    ======================================================================= */
+function LiveStopwatch({ startedAtIso }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const elapsed = Math.max(0, (now - new Date(startedAtIso).getTime()) / 1000);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
+      <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.hazard }} />
+      <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textDim, letterSpacing: 1 }}>WORKOUT TIME</span>
+      <span style={{ fontFamily: FONT_DISPLAY, fontSize: 22, color: C.text }}>{fmtDuration(elapsed)}</span>
+    </div>
+  );
+}
+
+function FinisherPicker({ activeKey, onSelect, onClose }) {
+  return (
+    <div style={{ background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+      <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint, letterSpacing: 1, marginBottom: 10 }}>SWAP THIS FINISHER</div>
+      {ALL_FINISHER_KEYS.map((key) => {
+        const meta = FINISHER_META[key];
+        const isActive = key === activeKey;
+        return (
+          <button key={key} onClick={() => onSelect(key)} style={{
+            width: "100%", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center",
+            background: isActive ? C.hazardDim : C.bgCard, border: `1px solid ${isActive ? C.hazard : C.line}`,
+            borderRadius: 8, padding: "10px 12px", marginBottom: 8, cursor: "pointer",
+          }}>
+            <div>
+              <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: isActive ? C.hazard : C.text, fontSize: 15 }}>{meta.label}</div>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: key === "sled" ? C.signal : C.textFaint, marginTop: 2 }}>{meta.space}</div>
+            </div>
+            {isActive && <CheckCircle2 size={16} color={C.hazard} />}
+          </button>
+        );
+      })}
+      <button onClick={onClose} style={{ width: "100%", background: "none", border: "none", color: C.textDim, fontFamily: FONT_MONO, fontSize: 13, padding: "8px 0 0", cursor: "pointer" }}>Close</button>
+    </div>
+  );
+}
+
 function ProgramTab({ profile, logs, saveEntry, saveDayMeta, week, setWeek, engine, onOpenTimer, onOpenChat }) {
   const [activeDay, setActiveDay] = useState(null);
   const [quoteIdx] = useState(() => Math.floor(Math.random() * QUOTES.length));
   const [tipIdx] = useState(() => Math.floor(Math.random() * TIPS.length));
+  const [showFinisherPicker, setShowFinisherPicker] = useState(false);
 
   const phase = getPhase(week);
   const deload = isDeload(week);
@@ -1005,42 +1166,36 @@ function ProgramTab({ profile, logs, saveEntry, saveDayMeta, week, setWeek, engi
   const active = activeDay ? sessions.find((s) => s.key === activeDay) : null;
   const wk = wKey(week);
 
-  const openDay = (key, dayType) => {
-    if (!logs[wk]?.days?.[key]?.startedAt) {
-      saveDayMeta(key, { startedAt: new Date().toISOString(), dayType });
-    }
-    setActiveDay(key);
-  };
-
-  // auto-mark a strength day complete once every set on every lift is checked off
-  useEffect(() => {
-    if (!active || active.session?.sim) return;
-    const liftIds = active.session.strength.map((e) => e.id);
-    const dayLog = logs[wk]?.entries || {};
-    const allDone = liftIds.length > 0 && liftIds.every((id) => dayLog[id] && (dayLog[id].setsCompleted || []).filter(Boolean).length >= (dayLog[id].totalSets || 1));
-    if (allDone && !logs[wk]?.days?.[active.key]?.completedAt) {
-      saveDayMeta(active.key, { completedAt: new Date().toISOString(), dayType: active.session.dayType });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, logs, wk]);
+  const openDay = (key) => { setActiveDay(key); setShowFinisherPicker(false); };
+  const startWorkout = (key, dayType) => saveDayMeta(key, { startedAt: new Date().toISOString(), dayType, completedAt: null });
+  const finishWorkout = (key, dayType) => saveDayMeta(key, { completedAt: new Date().toISOString(), dayType });
 
   if (active) {
     const { session, label, mins } = active;
     const dayMeta = logs[wk]?.days?.[active.key];
+    const started = !!dayMeta?.startedAt;
+    const completed = !!dayMeta?.completedAt;
     return (
-      <div style={{ maxWidth: 560, margin: "0 auto", padding: "20px 16px 100px" }}>
-        <button onClick={() => setActiveDay(null)} style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: C.textDim, fontFamily: FONT_BODY, fontSize: 13, cursor: "pointer", padding: 0, marginBottom: 16 }}>
+      <div style={{ maxWidth: 560, margin: "0 auto", padding: "calc(env(safe-area-inset-top) + 36px) 16px 100px" }}>
+        <button onClick={() => setActiveDay(null)} style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: C.textDim, fontFamily: FONT_BODY, fontSize: 15, cursor: "pointer", padding: 0, marginBottom: 16 }}>
           <ChevronLeft size={16} /> Back to week {week}
         </button>
         <MiniTimerBar engine={engine} onOpen={onOpenTimer} />
         <div style={{ marginBottom: 6 }}><Pill tone={session?.sim ? "signal" : "hazard"}>{label} · {mins} min</Pill></div>
-        <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 28, color: C.text, margin: "6px 0 4px", textTransform: "uppercase" }}>{session.dayType}</h2>
-        {deload && <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.signal, marginBottom: 8 }}>DELOAD WEEK — reduced load, same intent</div>}
-        {dayMeta?.completedAt && (
-          <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.hazard, marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>
+        <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 31, color: C.text, margin: "6px 0 4px", textTransform: "uppercase" }}>{session.dayType}</h2>
+        {deload && <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.signal, marginBottom: 8 }}>DELOAD WEEK — reduced load, same intent</div>}
+
+        {completed ? (
+          <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.hazard, marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>
             <CheckCircle2 size={14} /> Completed {fmtCompletedDate(dayMeta.completedAt)}
             {dayMeta.startedAt && ` · ${fmtDuration((new Date(dayMeta.completedAt) - new Date(dayMeta.startedAt)) / 1000)}`}
           </div>
+        ) : started ? (
+          <LiveStopwatch startedAtIso={dayMeta.startedAt} />
+        ) : (
+          <button onClick={() => startWorkout(active.key, session.dayType)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: C.hazard, border: "none", borderRadius: 8, padding: "14px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", marginBottom: 16 }}>
+            <Play size={18} /> Start Workout
+          </button>
         )}
 
         <WarmupBlock warmup={session.warmup} />
@@ -1048,44 +1203,55 @@ function ProgramTab({ profile, logs, saveEntry, saveDayMeta, week, setWeek, engi
         {session?.sim ? (
           <>
             <SimBlock sim={session.sim} />
-            <button onClick={onOpenTimer} style={{ marginTop: 14, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: C.signalDim, border: `1px solid ${C.signal}`, borderRadius: 8, padding: "12px", color: C.signal, fontFamily: FONT_DISPLAY, fontSize: 14, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
+            <button onClick={onOpenTimer} style={{ marginTop: 14, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: C.signalDim, border: `1px solid ${C.signal}`, borderRadius: 8, padding: "12px", color: C.signal, fontFamily: FONT_DISPLAY, fontSize: 16, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
               <TimerIcon size={16} /> Time this session
             </button>
-            {!dayMeta?.completedAt && (
-              <button onClick={() => saveDayMeta(active.key, { completedAt: new Date().toISOString(), dayType: session.dayType })}
-                style={{ marginTop: 10, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: "none", border: `1px solid ${C.hazard}`, borderRadius: 8, padding: "12px", color: C.hazard, fontFamily: FONT_DISPLAY, fontSize: 14, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
-                <CheckCircle2 size={16} /> Mark day complete
-              </button>
-            )}
           </>
         ) : (
           <>
-            <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, letterSpacing: 1, margin: "16px 0 8px" }}>STRENGTH</div>
+            <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, letterSpacing: 1, margin: "16px 0 8px" }}>STRENGTH</div>
             {session.strength.map((ex) => <ExerciseCard key={ex.id} ex={ex} week={week} logs={logs} dayType={session.dayType} onSave={saveEntry} />)}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 0 8px" }}>
-              <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, letterSpacing: 1 }}>CONDITIONING · 10-15 MIN</div>
-              <button onClick={onOpenTimer} style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: C.signal, fontFamily: FONT_MONO, fontSize: 11, cursor: "pointer" }}><TimerIcon size={13} /> Time it</button>
+              <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, letterSpacing: 1 }}>CONDITIONING · 10-15 MIN</div>
+              <button onClick={onOpenTimer} style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: C.signal, fontFamily: FONT_MONO, fontSize: 13, cursor: "pointer" }}><TimerIcon size={13} /> Time it</button>
             </div>
             {session.conditioning.map((c, i) => (
               <div key={i} style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: 14, marginBottom: 8 }}>
-                <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 14 }}>{c.name}</div>
-                <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textDim, marginTop: 3 }}>{c.detail}</div>
+                <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 16 }}>{c.name}</div>
+                <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: C.textDim, marginTop: 3 }}>{c.detail}</div>
               </div>
             ))}
+            {showFinisherPicker ? (
+              <FinisherPicker
+                activeKey={session.conditioningKey}
+                onSelect={(key) => { saveDayMeta(active.key, { finisherOverride: key }); setShowFinisherPicker(false); }}
+                onClose={() => setShowFinisherPicker(false)}
+              />
+            ) : (
+              <button onClick={() => setShowFinisherPicker(true)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: "none", border: `1px dashed ${C.line}`, borderRadius: 8, padding: "10px", color: C.textDim, fontFamily: FONT_MONO, fontSize: 13, letterSpacing: 0.5, cursor: "pointer", marginBottom: 8 }}>
+                <RotateCcw size={13} /> Select New Workout
+              </button>
+            )}
           </>
+        )}
+
+        {started && !completed && (
+          <button onClick={() => finishWorkout(active.key, session.dayType)} style={{ marginTop: 20, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "none", border: `1px solid ${C.hazard}`, borderRadius: 8, padding: "14px", color: C.hazard, fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
+            <CheckCircle2 size={18} /> Finish Workout
+          </button>
         )}
       </div>
     );
   }
 
   return (
-    <div style={{ maxWidth: 560, margin: "0 auto", padding: "20px 16px 100px" }}>
+    <div style={{ maxWidth: 560, margin: "0 auto", padding: "calc(env(safe-area-inset-top) + 36px) 16px 100px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <img src={APP_ICON} alt="My Trainer" style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0 }} />
           <div>
-            <div style={{ fontFamily: FONT_MONO, color: C.hazard, fontSize: 12, letterSpacing: 2 }}>MY TRAINER</div>
-            <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 30, color: C.text, margin: "2px 0 0", textTransform: "uppercase" }}>Week {week} <span style={{ color: C.textFaint, fontSize: 18 }}>/ 26</span></h1>
+            <div style={{ fontFamily: FONT_MONO, color: C.hazard, fontSize: 14, letterSpacing: 2 }}>MY TRAINER</div>
+            <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 33, color: C.text, margin: "2px 0 0", textTransform: "uppercase" }}>Week {week} <span style={{ color: C.textFaint, fontSize: 20 }}>/ 26</span></h1>
           </div>
         </div>
       </div>
@@ -1095,7 +1261,7 @@ function ProgramTab({ profile, logs, saveEntry, saveDayMeta, week, setWeek, engi
       <div style={{ background: `linear-gradient(135deg, ${C.hazardDim}, ${C.bgRaised})`, border: `1px solid ${C.hazardDim}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <Flame size={16} color={C.hazard} style={{ marginTop: 2, flexShrink: 0 }} />
-          <div style={{ fontFamily: FONT_BODY, fontStyle: "italic", color: C.text, fontSize: 14, lineHeight: 1.5 }}>"{QUOTES[quoteIdx]}"</div>
+          <div style={{ fontFamily: FONT_BODY, fontStyle: "italic", color: C.text, fontSize: 16, lineHeight: 1.5 }}>"{QUOTES[quoteIdx]}"</div>
         </div>
       </div>
 
@@ -1105,36 +1271,36 @@ function ProgramTab({ profile, logs, saveEntry, saveDayMeta, week, setWeek, engi
         ))}
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
-        <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textDim }}>PHASE {phaseIdx + 1}/5 · <span style={{ color: C.text, fontWeight: 700 }}>{phase.name.toUpperCase()}</span> — {phase.focus}</div>
+        <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textDim }}>PHASE {phaseIdx + 1}/5 · <span style={{ color: C.text, fontWeight: 700 }}>{phase.name.toUpperCase()}</span> — {phase.focus}</div>
         <PlateStack level={phaseIdx + 1} />
       </div>
 
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
         <button onClick={() => setWeek(Math.max(1, week - 1))} disabled={week === 1} style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 6, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: week === 1 ? "default" : "pointer", opacity: week === 1 ? 0.4 : 1 }}><ChevronLeft size={16} color={C.text} /></button>
-        <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textDim }}>{deload ? <span style={{ color: C.signal, fontWeight: 700 }}>DELOAD</span> : "TRAINING WEEK"}</div>
+        <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.textDim }}>{deload ? <span style={{ color: C.signal, fontWeight: 700 }}>DELOAD</span> : "TRAINING WEEK"}</div>
         <button onClick={() => setWeek(Math.min(26, week + 1))} disabled={week === 26} style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 6, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: week === 26 ? "default" : "pointer", opacity: week === 26 ? 0.4 : 1 }}><ChevronRight size={16} color={C.text} /></button>
       </div>
 
       {sessions.map((s) => {
-        const dayLog = logs[wk]?.entries || {};
         const dayMeta = logs[wk]?.days?.[s.key];
-        const liftIds = s.session?.strength?.map((e) => e.id) || [];
-        const completedCount = liftIds.filter((id) => dayLog[id] && (dayLog[id].setsCompleted || []).filter(Boolean).length >= (dayLog[id].totalSets || 1)).length;
-        const complete = !!dayMeta?.completedAt || (!s.session?.sim && liftIds.length > 0 && completedCount >= liftIds.length);
+        const complete = !!dayMeta?.completedAt;
+        const inProgress = !!dayMeta?.startedAt && !complete;
         const duration = dayMeta?.completedAt && dayMeta?.startedAt ? fmtDuration((new Date(dayMeta.completedAt) - new Date(dayMeta.startedAt)) / 1000) : null;
         return (
-          <button key={s.key} onClick={() => openDay(s.key, s.session?.dayType)} style={{ width: "100%", textAlign: "left", background: C.bgCard, border: `1px solid ${complete ? C.hazardDim : C.line}`, borderRadius: 10, padding: 14, marginBottom: 10, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <button key={s.key} onClick={() => openDay(s.key)} style={{ width: "100%", textAlign: "left", background: C.bgCard, border: `1px solid ${complete ? C.hazardDim : inProgress ? C.signal : C.line}`, borderRadius: 10, padding: 14, marginBottom: 10, cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
-              <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.textFaint, letterSpacing: 1 }}>{s.label.toUpperCase()} · {s.mins} MIN</div>
-              <div style={{ fontFamily: FONT_DISPLAY, fontSize: 18, color: C.text, textTransform: "uppercase", marginTop: 2 }}>{s.session?.dayType}</div>
-              {dayMeta?.completedAt && (
-                <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.hazard, marginTop: 3 }}>
+              <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint, letterSpacing: 1 }}>{s.label.toUpperCase()} · {s.mins} MIN</div>
+              <div style={{ fontFamily: FONT_DISPLAY, fontSize: 20, color: C.text, textTransform: "uppercase", marginTop: 2 }}>{s.session?.dayType}</div>
+              {complete ? (
+                <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.hazard, marginTop: 3 }}>
                   Completed {fmtCompletedDate(dayMeta.completedAt)}{duration ? ` · ${duration}` : ""}
                 </div>
-              )}
+              ) : inProgress ? (
+                <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.signal, marginTop: 3 }}>In progress…</div>
+              ) : null}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              {s.key === "sat" && !complete ? <Activity size={16} color={C.signal} /> : (complete ? <CheckCircle2 size={18} color={C.hazard} /> : <div style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${C.textFaint}` }} />)}
+              {complete ? <CheckCircle2 size={18} color={C.hazard} /> : inProgress ? <div style={{ width: 10, height: 10, borderRadius: "50%", background: C.signal }} /> : s.key === "sat" ? <Activity size={16} color={C.signal} /> : <div style={{ width: 18, height: 18, borderRadius: "50%", border: `2px solid ${C.textFaint}` }} />}
               <ChevronRight size={16} color={C.textFaint} />
             </div>
           </button>
@@ -1142,8 +1308,8 @@ function ProgramTab({ profile, logs, saveEntry, saveDayMeta, week, setWeek, engi
       })}
 
       <div style={{ background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 10, padding: 14, marginTop: 8, marginBottom: 16 }}>
-        <div style={{ fontFamily: FONT_MONO, fontSize: 10, color: C.signal, letterSpacing: 1, marginBottom: 6 }}>COACH TIP</div>
-        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim, lineHeight: 1.5 }}>{TIPS[tipIdx]}</div>
+        <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.signal, letterSpacing: 1, marginBottom: 6 }}>COACH TIP</div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.textDim, lineHeight: 1.5 }}>{TIPS[tipIdx]}</div>
       </div>
     </div>
   );
@@ -1165,7 +1331,7 @@ function TabBar({ tab, setTab, timerActive }) {
         return (
           <button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, background: "none", border: "none", padding: "10px 0 8px", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, cursor: "pointer", position: "relative" }}>
             <Icon size={20} color={activeTab ? C.hazard : C.textFaint} />
-            <span style={{ fontFamily: FONT_MONO, fontSize: 10, letterSpacing: 0.5, color: activeTab ? C.hazard : C.textFaint, textTransform: "uppercase" }}>{t.label}</span>
+            <span style={{ fontFamily: FONT_MONO, fontSize: 12, letterSpacing: 0.5, color: activeTab ? C.hazard : C.textFaint, textTransform: "uppercase" }}>{t.label}</span>
             {t.id === "timer" && timerActive && <span style={{ position: "absolute", top: 6, right: "32%", width: 7, height: 7, borderRadius: "50%", background: C.signal }} />}
           </button>
         );
@@ -1177,6 +1343,32 @@ function TabBar({ tab, setTab, timerActive }) {
 /* =========================================================================
    ROOT
    ======================================================================= */
+function useWakeLock() {
+  const lockRef = useRef(null);
+
+  const requestLock = useCallback(async () => {
+    if (!("wakeLock" in navigator)) return;
+    try {
+      lockRef.current = await navigator.wakeLock.request("screen");
+    } catch (e) {
+      // Wake Lock can be refused (e.g. low battery) — fail silently, screen will just sleep normally.
+    }
+  }, []);
+
+  useEffect(() => {
+    requestLock();
+    const onVisibility = () => {
+      // The lock is auto-released whenever the tab/app is backgrounded, so re-acquire on return.
+      if (document.visibilityState === "visible") requestLock();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (lockRef.current) lockRef.current.release().catch(() => {});
+    };
+  }, [requestLock]);
+}
+
 function App() {
   const [profile, setProfile] = useState(undefined);
   const [logs, setLogs] = useState({});
@@ -1184,6 +1376,7 @@ function App() {
   const [week, setWeek] = useState(1);
   const [tab, setTab] = useState("program");
   const engine = useTimerEngine();
+  useWakeLock();
 
   useEffect(() => {
     (async () => {
@@ -1242,7 +1435,7 @@ function App() {
       {profile === undefined ? (
         <div style={{ padding: 60, textAlign: "center" }}>
           <img src={APP_ICON} alt="My Trainer" style={{ width: 64, height: 64, borderRadius: 14, marginBottom: 14 }} />
-          <div style={{ color: C.textFaint, fontFamily: FONT_MONO, fontSize: 12 }}>Loading…</div>
+          <div style={{ color: C.textFaint, fontFamily: FONT_MONO, fontSize: 14 }}>Loading…</div>
         </div>
       ) : !profile ? (
         <Onboarding onComplete={handleOnboard} />
