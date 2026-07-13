@@ -1230,7 +1230,7 @@ function WarmupBlock({ warmup }) {
 /* =========================================================================
    PROGRAM TAB (dashboard + session)
    ======================================================================= */
-const STALE_WORKOUT_SECONDS = 4 * 3600; // 4 hours — beyond this, it's almost certainly a forgotten Finish, not a real session
+const STALE_WORKOUT_SECONDS = 90 * 60; // 90 min — longest planned session is 60 min, so beyond this it's a forgotten Finish, not a real one
 
 function LiveStopwatch({ startedAtIso, onReset }) {
   const [now, setNow] = useState(Date.now());
