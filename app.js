@@ -657,11 +657,15 @@ function ExerciseCard({ ex, week, logs, dayType, onSave }) {
   const existing = logs[wk]?.entries?.[ex.id];
   const last = getLastEntry(logs, ex.id, week);
   const defaultReps = parseTargetReps(ex.reps);
+  const carriedReps = () => {
+    const base = last?.repsPerSet && last.repsPerSet.length ? last.repsPerSet : [];
+    return Array(ex.sets).fill("").map((_, i) => base[i] ?? "");
+  };
 
   const [weight, setWeight] = useState(existing?.weight ?? ex.weightKg ?? last?.weight ?? "");
   const [rpe, setRpe] = useState(existing?.rpe ?? "");
   const [done, setDone] = useState(existing?.setsCompleted ?? Array(ex.sets).fill(false));
-  const [repsPerSet, setRepsPerSet] = useState(existing?.repsPerSet ?? Array(ex.sets).fill(""));
+  const [repsPerSet, setRepsPerSet] = useState(existing?.repsPerSet ?? carriedReps());
   const [showScale, setShowScale] = useState(false);
   const [restRemaining, setRestRemaining] = useState(null);
 
@@ -678,7 +682,7 @@ function ExerciseCard({ ex, week, logs, dayType, onSave }) {
     setWeight(existing?.weight ?? ex.weightKg ?? last?.weight ?? "");
     setRpe(existing?.rpe ?? "");
     setDone(existing?.setsCompleted ?? Array(ex.sets).fill(false));
-    setRepsPerSet(existing?.repsPerSet ?? Array(ex.sets).fill(""));
+    setRepsPerSet(existing?.repsPerSet ?? carriedReps());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ex.id, week]);
 
@@ -882,13 +886,13 @@ function useTimerEngine() {
     setPreRemaining(10);
     setPreCounting(true);
   };
-  const skipPreCountdown = () => { setPreCounting(false); actuallyStart(); };
+  const skipPreCountdown = () => { getAudioCtx(); setPreCounting(false); actuallyStart(); };
   const pause = () => {
     // For Time has no fixed end — stopping it IS "the timer ending", so confirm with a bell.
     if (cfg.mode === "fortime") bell();
     setRunning(false);
   };
-  const resume = () => setRunning(true);
+  const resume = () => { getAudioCtx(); setRunning(true); };
   const reset = () => {
     setRunning(false); setPreCounting(false); setFinished(false); setElapsed(0); setRounds(0); setReps(0); setPhaseIdx(0);
     setPhaseRemaining((buildPhases(cfg)[0] || {}).seconds || 0);
@@ -1828,8 +1832,14 @@ function App() {
       const tl = await loadKey("timerLogs", []);
       const eq = await loadKey("equipment", DEFAULT_EQUIPMENT);
       const tmpl = await loadKey("template", "default");
-      setProfile(p); setLogs(l || {}); setTimerLogs(tl || []); setEquipment({ ...DEFAULT_EQUIPMENT, ...(eq || {}) }); setTemplate(tmpl || "default");
+      const wk = await loadKey("currentWeek", 1);
+      setProfile(p); setLogs(l || {}); setTimerLogs(tl || []); setEquipment({ ...DEFAULT_EQUIPMENT, ...(eq || {}) }); setTemplate(tmpl || "default"); setWeek(wk || 1);
     })();
+  }, []);
+
+  const updateWeek = useCallback((w) => {
+    setWeek(w);
+    saveKey("currentWeek", w);
   }, []);
 
   const handleOnboard = async (p) => { setProfile(p); await saveKey("profile", p); };
@@ -1907,7 +1917,7 @@ function App() {
       ) : (
         <>
           {tab === "program" && (
-            <ProgramTab profile={profile} logs={logs} equipment={equipment} template={template} saveEntry={saveEntry} saveDayMeta={saveDayMeta} week={week} setWeek={setWeek} engine={engine} onOpenTimer={() => setTab("timer")} onTimeWorkout={onTimeWorkout} />
+            <ProgramTab profile={profile} logs={logs} equipment={equipment} template={template} saveEntry={saveEntry} saveDayMeta={saveDayMeta} week={week} setWeek={updateWeek} engine={engine} onOpenTimer={() => setTab("timer")} onTimeWorkout={onTimeWorkout} />
           )}
           {tab === "timer" && <TimerTab engine={engine} onLogResult={onLogTimerResult} context={timerContext} onClearContext={() => setTimerContext(null)} />}
           {tab === "log" && <LogTab logs={logs} timerLogs={timerLogs} />}
