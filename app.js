@@ -325,7 +325,114 @@ function dynamicWarmup(dayKey) {
   return sets[dayKey] || [];
 }
 
-function buildDaySession(dayKey, week, profile, logs, equipment) {
+/* =========================================================================
+   STRENGTH TEMPLATES
+   Swappable programming styles. "default" uses this app's built-in 5-phase
+   %1RM periodization (see PHASES above). Everything else replaces just the
+   MAIN lift's sets/reps/weight logic — accessories, warmups, and
+   conditioning stay the same either way (Simple & Sinister is the one
+   exception: it replaces the whole strength block, see below).
+   ======================================================================= */
+const STRENGTH_TEMPLATES = [
+  { id: "default", name: "My Trainer Default", blurb: "This app's built-in 5-phase periodized build toward Hyrox." },
+  { id: "5x5", name: "5x5 Linear", blurb: "Classic beginner strength: 5 sets of 5, small weekly weight jumps, light deload every 6th week." },
+  { id: "531", name: "Wendler 5/3/1", blurb: "4-week waves off a 90%-of-1RM training max. One heavy top set each week, training max climbs each cycle." },
+  { id: "rpt", name: "Reverse Pyramid (RPT)", blurb: "One heavy top set, then two lighter back-off sets with a couple more reps." },
+  { id: "doubleprog", name: "Double Progression", blurb: "Hold a weight across a 6-10 rep range — only add weight once every set hits 9-10 reps." },
+  { id: "simplesinister", name: "Simple & Sinister", blurb: "Pavel Tsatsouline's kettlebell standard: swings + Turkish get-ups, most days, building toward your heaviest bell." },
+];
+
+function tmFromOneRm(oneRm) { return oneRm * 0.9; } // Wendler training max
+
+function isLowerLift(liftKey) { return liftKey === "squat" || liftKey === "trapDeadlift"; }
+
+// Builds the main-lift entry/entries for a given template. Returns an array
+// (usually length 1, length 2 for RPT's top set + back-off sets).
+function buildMainEntries(template, dayKey, liftKey, name, equipment, profile, logs, week, defaultSets, defaultReps) {
+  const oneRm = profile[liftKey];
+  const id = `${dayKey}-${liftKey}`;
+  if (!oneRm) {
+    return [{ id, name, equipment, sets: defaultSets, reps: defaultReps, weightKg: null, liftKey, trackWeight: true, note: "Set your 1RM in Setup for a weight recommendation" }];
+  }
+
+  if (template === "5x5") {
+    const isDeloadWk = week % 6 === 0;
+    const inc = isLowerLift(liftKey) ? 2.5 : 1.25;
+    const w = roundBar((oneRm * 0.7 + (week - 1) * inc) * (isDeloadWk ? 0.85 : 1));
+    return [{ id, name, equipment, sets: 5, reps: "5", weightKg: w, liftKey, trackWeight: true, note: isDeloadWk ? "Deload week — lighter, same reps" : undefined }];
+  }
+
+  if (template === "531") {
+    const tm = tmFromOneRm(oneRm);
+    const cycle = Math.floor((week - 1) / 4);
+    const cycleBump = isLowerLift(liftKey) ? 5 : 2.5;
+    const cycledTm = tm + cycle * cycleBump;
+    const wkInCycle = ((week - 1) % 4) + 1;
+    const table = {
+      1: { pcts: [0.65, 0.75, 0.85], reps: "5/5/5+" },
+      2: { pcts: [0.70, 0.80, 0.90], reps: "3/3/3+" },
+      3: { pcts: [0.75, 0.85, 0.95], reps: "5/3/1+" },
+      4: { pcts: [0.40, 0.50, 0.60], reps: "5/5/5" },
+    }[wkInCycle];
+    const topW = roundBar(cycledTm * table.pcts[2]);
+    const note = wkInCycle === 4
+      ? "Deload week — light triples, technique focus"
+      : `Ramp up: ${Math.round(table.pcts[0] * 100)}% → ${Math.round(table.pcts[1] * 100)}% → top set shown (${Math.round(table.pcts[2] * 100)}% of training max)`;
+    return [{ id, name, equipment, sets: 3, reps: table.reps, weightKg: topW, liftKey, trackWeight: true, note }];
+  }
+
+  if (template === "rpt") {
+    const pct = Math.min(0.83, 0.68 + (week - 1) * 0.006);
+    const topW = roundBar(oneRm * pct);
+    const backoffW = roundBar(topW * 0.9);
+    return [
+      { id, name: `${name} — Top Set`, equipment, sets: 1, reps: "4-6", weightKg: topW, liftKey, trackWeight: true, note: "Heaviest set of the day — go here first" },
+      { id: `${id}-backoff`, name: `${name} — Back-off Sets`, equipment, sets: 2, reps: "6-8", weightKg: backoffW, trackWeight: true },
+    ];
+  }
+
+  if (template === "doubleprog") {
+    const priorEntries = allEntries(logs).filter((e) => e.liftKey === liftKey && e.week < week).sort((a, b) => b.week - a.week);
+    let w;
+    if (!priorEntries.length) {
+      w = roundBar(oneRm * 0.7);
+    } else {
+      const last = priorEntries[0];
+      const repVals = (last.repsPerSet || []).map(Number).filter((n) => !isNaN(n) && n > 0);
+      const hitTop = repVals.length > 0 && repVals.every((r) => r >= 9);
+      const inc = isLowerLift(liftKey) ? 2.5 : 1.25;
+      w = roundBar((last.weight || oneRm * 0.7) + (hitTop ? inc : 0));
+    }
+    return [{ id, name, equipment, sets: 3, reps: "6-10", weightKg: w, liftKey, trackWeight: true, note: "Add weight next time only once every set hits 9-10 reps" }];
+  }
+
+  // "default" template is handled by the caller using the phase-based mainLiftWeight() —
+  // buildMainEntries is never called for it.
+  return null;
+}
+
+// Simple & Sinister ramps kettlebell weight toward your heaviest owned bell (25kg) over
+// the program. True "Simple" standard is 32kg — noted in-app once you're at your max.
+function simpleSinisterWeight(week) {
+  if (week <= 4) return 12;
+  if (week <= 10) return 16;
+  if (week <= 18) return 20;
+  return 25;
+}
+function buildSimpleSinisterDay(dayKey, week, finisherFor, warmup) {
+  const swingW = simpleSinisterWeight(week);
+  const tguW = nearestFrom(KB_WEIGHTS, Math.max(12, swingW - 4));
+  return {
+    dayType: "Simple & Sinister", warmup,
+    strength: [
+      { id: `${dayKey}-ssswings`, name: `Kettlebell Swings (${swingW}kg)`, equipment: "single kettlebell", sets: 10, reps: "10 (EMOM style, ~1 min/set)", weightKg: swingW, trackWeight: true, note: swingW < 25 ? "Building toward your heaviest KB (25kg)" : "At your heaviest available KB — true Simple standard is 32kg if you pick one up later" },
+      { id: `${dayKey}-sstgu`, name: `Turkish Get-Ups (${tguW}kg)`, equipment: "single kettlebell", sets: 10, reps: "1/side, alternate", weightKg: tguW, trackWeight: true },
+    ],
+    conditioning: condShort(week, finisherFor(dayKey)), conditioningKey: finisherFor(dayKey),
+  };
+}
+
+function buildDaySession(dayKey, week, profile, logs, equipment, template = "default") {
   const phase = getPhase(week);
   const deload = isDeload(week);
   const sets = deload ? Math.max(2, phase.sets - 1) : phase.sets;
@@ -334,18 +441,25 @@ function buildDaySession(dayKey, week, profile, logs, equipment) {
   const override = logs[wKey(week)]?.days?.[dayKey]?.finisherOverride;
   const finisherFor = (d) => override || finishers[d];
 
-  const mkMain = (liftKey, name, equipment) => {
+  if (template === "simplesinister" && ["mon", "tue", "thu", "fri"].includes(dayKey)) {
+    return buildSimpleSinisterDay(dayKey, week, finisherFor, warmup);
+  }
+
+  const mkMain = (liftKey, name, eq) => {
+    if (template !== "default") {
+      return buildMainEntries(template, dayKey, liftKey, name, eq, profile, logs, week, sets, phase.repsMain);
+    }
     const w = mainLiftWeight(profile, logs, liftKey, week);
-    return { id: `${dayKey}-${liftKey}`, name, equipment, sets, reps: phase.repsMain, weightKg: w, liftKey, trackWeight: true, note: w == null ? "Set your 1RM in Setup for a weight recommendation" : undefined };
+    return [{ id: `${dayKey}-${liftKey}`, name, equipment: eq, sets, reps: phase.repsMain, weightKg: w, liftKey, trackWeight: true, note: w == null ? "Set your 1RM in Setup for a weight recommendation" : undefined }];
   };
-  const mkAcc = (id, name, equipment, s, reps, weightKg) => ({ id: `${dayKey}-${id}`, name, equipment, sets: s, reps, weightKg: weightKg ?? null, trackWeight: true });
+  const mkAcc = (id, name, eq, s, reps, weightKg) => ({ id: `${dayKey}-${id}`, name, equipment: eq, sets: s, reps, weightKg: weightKg ?? null, trackWeight: true });
 
   if (dayKey === "mon") {
     const dl = mainLiftWeight(profile, logs, "trapDeadlift", week);
     return {
       dayType: "Lower Strength", warmup,
       strength: [
-        mkMain("squat", "Back Squat", "20kg barbell + plates, squat rack"),
+        ...mkMain("squat", "Back Squat", "20kg barbell + plates, squat rack"),
         mkAcc("speedpull", "Trap Bar Deadlift (light, speed pulls)", "25kg trap bar", 3, "5", dl ? roundBar(dl * 0.6) : null),
         mkAcc("stepup", "Weighted step-ups", "vest or dumbbells", 3, "10/leg"),
       ],
@@ -354,7 +468,7 @@ function buildDaySession(dayKey, week, profile, logs, equipment) {
   }
   if (dayKey === "tue") {
     const strength = [
-      mkMain("swissBench", "Swiss Bar Bench Press (shoulder-friendly grip)", "28kg Swiss bar"),
+      ...mkMain("swissBench", "Swiss Bar Bench Press (shoulder-friendly grip)", "28kg Swiss bar"),
       mkAcc("pullup", "Weighted pull-ups", "pull-up bar + dip belt", sets, "5-8"),
       mkAcc("dips", "Weighted dips", "dip bar + dip belt", 3, "8-10"),
     ];
@@ -371,7 +485,7 @@ function buildDaySession(dayKey, week, profile, logs, equipment) {
     return {
       dayType: "Posterior Chain", warmup,
       strength: [
-        mkMain("trapDeadlift", "Trap Bar Deadlift", "25kg trap bar"),
+        ...mkMain("trapDeadlift", "Trap Bar Deadlift", "25kg trap bar"),
         mkAcc("rdl", "Single-leg RDL (DB)", "adjustable dumbbells", 3, "8/leg"),
         mkAcc("carry", "Farmer's carry", "trap bar or heavy dumbbells", 3, "40m"),
       ],
@@ -382,7 +496,7 @@ function buildDaySession(dayKey, week, profile, logs, equipment) {
     return {
       dayType: "Hybrid + Engine", warmup,
       strength: [
-        mkMain("ohp", "Standing Overhead Press", "20kg barbell"),
+        ...mkMain("ohp", "Standing Overhead Press", "20kg barbell"),
         mkAcc("lunge", "Weighted walking lunges", "vest or dip belt", 3, "12/leg"),
         mkAcc("goblet", "KB goblet squat", `${nearestFrom(KB_WEIGHTS, 20)}kg kettlebell`, 3, "10"),
       ],
@@ -426,9 +540,9 @@ function beep(freq = 880, dur = 150, vol = 0.15) {
   } catch (e) {}
 }
 // Short high pip — used for the 3-2-1 countdown cues.
-function pip() { beep(1000, 90, 0.14); }
+function pip() { beep(1000, 100, 0.22); }
 // Lower double-tone bell — used when a timer/phase hits zero.
-function bell() { beep(440, 320, 0.18); setTimeout(() => beep(440, 380, 0.18), 260); }
+function bell() { beep(440, 340, 0.28); setTimeout(() => beep(440, 400, 0.28), 260); }
 
 /* =========================================================================
    SMALL UI PRIMITIVES
@@ -769,7 +883,11 @@ function useTimerEngine() {
     setPreCounting(true);
   };
   const skipPreCountdown = () => { setPreCounting(false); actuallyStart(); };
-  const pause = () => setRunning(false);
+  const pause = () => {
+    // For Time has no fixed end — stopping it IS "the timer ending", so confirm with a bell.
+    if (cfg.mode === "fortime") bell();
+    setRunning(false);
+  };
   const resume = () => setRunning(true);
   const reset = () => {
     setRunning(false); setPreCounting(false); setFinished(false); setElapsed(0); setRounds(0); setReps(0); setPhaseIdx(0);
@@ -838,6 +956,8 @@ function MiniTimerBar({ engine, onOpen }) {
       width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
       background: finished ? C.hazardDim : C.signalDim, border: `1px solid ${finished ? C.hazard : C.signal}`,
       borderRadius: 8, padding: "10px 14px", marginBottom: 14, cursor: "pointer",
+      position: "sticky", top: "calc(env(safe-area-inset-top) + 8px)", zIndex: 15,
+      boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
     }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <TimerIcon size={16} color={finished ? C.hazard : C.signal} />
@@ -1003,7 +1123,7 @@ function TimerTab({ engine, onLogResult, context, onClearContext }) {
           <button onClick={start} style={{ display: "flex", alignItems: "center", gap: 6, background: C.hazard, border: "none", borderRadius: 8, padding: "12px 24px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}><Play size={16} /> Start</button>
         )}
         {running && (
-          <button onClick={pause} style={{ display: "flex", alignItems: "center", gap: 6, background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 24px", color: C.text, fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}><Pause size={16} /> Pause</button>
+          <button onClick={pause} style={{ display: "flex", alignItems: "center", gap: 6, background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px 24px", color: C.text, fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}><Pause size={16} /> {cfg.mode === "fortime" ? "Stop" : "Pause"}</button>
         )}
         {!running && elapsed > 0 && !finished && (
           <button onClick={resume} style={{ display: "flex", alignItems: "center", gap: 6, background: C.hazard, border: "none", borderRadius: 8, padding: "12px 24px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}><Play size={16} /> Resume</button>
@@ -1301,7 +1421,83 @@ function RepsStepper({ value, onChange, label = "REPS/ROUNDS" }) {
   );
 }
 
-function ProgramTab({ profile, logs, equipment, saveEntry, saveDayMeta, week, setWeek, engine, onOpenTimer, onTimeWorkout }) {
+function estimateMainWeight(template, liftKey, profile, logs, week) {
+  const oneRm = profile[liftKey];
+  if (!oneRm) return null;
+  if (template === "default") return mainLiftWeight(profile, logs, liftKey, week);
+  if (template === "simplesinister") return null; // not a barbell-1RM lift under this template
+  const entries = buildMainEntries(template, "summary", liftKey, "", "", profile, logs, week, 4, "6-8");
+  return entries && entries[0] ? entries[0].weightKg : null;
+}
+
+function ProgramSummary({ profile, logs, week, template }) {
+  const [expanded, setExpanded] = useState(false);
+  const phase = getPhase(week);
+  const liftLabels = { squat: "Squat", swissBench: "Bench", trapDeadlift: "Deadlift", ohp: "OHP" };
+  const tmpl = STRENGTH_TEMPLATES.find((t) => t.id === template) || STRENGTH_TEMPLATES[0];
+
+  const deltas = template === "simplesinister"
+    ? (() => {
+        const w1 = simpleSinisterWeight(1), wNow = simpleSinisterWeight(week);
+        return wNow > w1 ? [{ label: "KB Swings", delta: wNow - w1 }] : [];
+      })()
+    : Object.entries(liftLabels).map(([key, label]) => {
+        const w1 = estimateMainWeight(template, key, profile, logs, 1);
+        const wNow = estimateMainWeight(template, key, profile, logs, week);
+        if (w1 == null || wNow == null || wNow <= w1) return null;
+        return { label, delta: wNow - w1 };
+      }).filter(Boolean);
+
+  return (
+    <div style={{ background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+      <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.hazard, letterSpacing: 1, marginBottom: 6 }}>PROGRAM OVERVIEW</div>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 14, color: C.text, lineHeight: 1.5 }}>
+        26-week Hyrox build · Week {week} of 26 · <span style={{ fontWeight: 600 }}>{phase.name}</span>
+      </div>
+      <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim, marginTop: 4, lineHeight: 1.5 }}>
+        {template === "default"
+          ? `Working sets run ${Math.round(phase.intensity[0] * 100)}%→${Math.round(phase.intensity[1] * 100)}% of your 1RM this phase, ${phase.id === "peak" ? "no deload — stay fresh" : phase.id === "race" ? "tapering into race week" : "deloading every 4th week"}.`
+          : `Strength style: ${tmpl.name} — ${tmpl.blurb}`}
+      </div>
+
+      {deltas.length > 0 && (
+        <>
+          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {deltas.map((d) => (
+              <span key={d.label} style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.good, background: "rgba(127,176,105,0.12)", border: "1px solid rgba(127,176,105,0.4)", borderRadius: 4, padding: "4px 8px" }}>
+                {d.label} +{fmtKg(d.delta)}kg since Week 1
+              </span>
+            ))}
+          </div>
+          <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.textFaint, marginTop: 8, fontStyle: "italic" }}>
+            Great work — that's real progress. Keep stacking these weeks.
+          </div>
+        </>
+      )}
+
+      <button onClick={() => setExpanded((e) => !e)} style={{ marginTop: 12, background: "none", border: "none", color: C.signal, fontFamily: FONT_MONO, fontSize: 12, letterSpacing: 0.5, cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 4 }}>
+        {expanded ? "Hide" : "See"} full phase breakdown <ChevronRight size={12} style={{ transform: expanded ? "rotate(90deg)" : "none" }} />
+      </button>
+
+      {expanded && (
+        <div style={{ marginTop: 10 }}>
+          {PHASES.map((p) => (
+            <div key={p.id} style={{ padding: "8px 0", borderTop: `1px solid ${C.lineFaint}` }}>
+              <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: p.id === phase.id ? C.hazard : C.text, fontSize: 13 }}>
+                {p.name} · Weeks {p.range[0]}-{p.range[1]}
+              </div>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textDim, marginTop: 2 }}>
+                {Math.round(p.intensity[0] * 100)}%→{Math.round(p.intensity[1] * 100)}% of 1RM · {p.sets} sets · {p.focus}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProgramTab({ profile, logs, equipment, template, saveEntry, saveDayMeta, week, setWeek, engine, onOpenTimer, onTimeWorkout }) {
   const [activeDay, setActiveDay] = useState(null);
   const [quoteIdx] = useState(() => Math.floor(Math.random() * QUOTES.length));
   const [tipIdx] = useState(() => Math.floor(Math.random() * TIPS.length));
@@ -1310,7 +1506,7 @@ function ProgramTab({ profile, logs, equipment, saveEntry, saveDayMeta, week, se
   const phase = getPhase(week);
   const deload = isDeload(week);
   const phaseIdx = PHASES.findIndex((p) => p.id === phase.id);
-  const sessions = useMemo(() => DAY_DEFS.map((d) => ({ ...d, session: buildDaySession(d.key, week, profile, logs, equipment) })), [week, profile, logs, equipment]);
+  const sessions = useMemo(() => DAY_DEFS.map((d) => ({ ...d, session: buildDaySession(d.key, week, profile, logs, equipment, template) })), [week, profile, logs, equipment, template]);
   const active = activeDay ? sessions.find((s) => s.key === activeDay) : null;
   const wk = wKey(week);
 
@@ -1418,6 +1614,8 @@ function ProgramTab({ profile, logs, equipment, saveEntry, saveDayMeta, week, se
         </div>
       </div>
 
+      <ProgramSummary profile={profile} logs={logs} week={week} template={template} />
+
       <MiniTimerBar engine={engine} onOpen={onOpenTimer} />
 
       <div style={{ background: `linear-gradient(135deg, ${C.hazardDim}, ${C.bgRaised})`, border: `1px solid ${C.hazardDim}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
@@ -1524,8 +1722,18 @@ function useWakeLock() {
       if (document.visibilityState === "visible") requestLock();
     };
     document.addEventListener("visibilitychange", onVisibility);
+
+    // Safari/iOS only actually grants Wake Lock (and unsuspends AudioContext) inside a real
+    // user gesture — a request on page load or a visibility change alone is often silently
+    // ignored. Re-requesting on every tap guarantees it catches a genuine gesture and stays held.
+    const onGesture = () => { requestLock(); getAudioCtx(); };
+    document.addEventListener("touchend", onGesture, { passive: true });
+    document.addEventListener("click", onGesture);
+
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
+      document.removeEventListener("touchend", onGesture);
+      document.removeEventListener("click", onGesture);
       if (lockRef.current) lockRef.current.release().catch(() => {});
     };
   }, [requestLock]);
@@ -1533,8 +1741,9 @@ function useWakeLock() {
 
 const DEFAULT_EQUIPMENT = { adjustableBench: false, rower: false, wallball: false };
 
-function SettingsModal({ equipment, onSaveEquipment, onReset, onClose }) {
+function SettingsModal({ equipment, onSaveEquipment, template, onSaveTemplate, onReset, onClose }) {
   const [local, setLocal] = useState(equipment);
+  const [localTemplate, setLocalTemplate] = useState(template);
   const toggle = (key) => setLocal((l) => ({ ...l, [key]: !l[key] }));
   const items = [
     { key: "adjustableBench", label: "Adjustable Bench", detail: "Unlocks Incline DB Bench Press as a Tuesday accessory" },
@@ -1546,7 +1755,28 @@ function SettingsModal({ equipment, onSaveEquipment, onReset, onClose }) {
       <div onClick={(e) => e.stopPropagation()} style={{ background: C.bgRaised, width: "100%", maxHeight: "85vh", overflowY: "auto", borderRadius: "16px 16px 0 0", border: `1px solid ${C.line}`, borderBottom: "none", padding: "20px 18px calc(env(safe-area-inset-bottom) + 24px)" }}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 22, color: C.text, textTransform: "uppercase", marginBottom: 4 }}>Settings</div>
 
-        <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint, letterSpacing: 1, margin: "18px 0 10px" }}>EQUIPMENT</div>
+        <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint, letterSpacing: 1, margin: "18px 0 10px" }}>STRENGTH STYLE</div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim, marginBottom: 12, lineHeight: 1.5 }}>
+          Swap how your main lift is programmed each day. Accessories, warm-ups, and conditioning stay the same either way.
+        </div>
+        {STRENGTH_TEMPLATES.map((t) => (
+          <button key={t.id} onClick={() => setLocalTemplate(t.id)} style={{
+            width: "100%", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "center",
+            background: localTemplate === t.id ? C.hazardDim : C.bgCard, border: `1px solid ${localTemplate === t.id ? C.hazard : C.line}`,
+            borderRadius: 8, padding: "10px 12px", marginBottom: 8, cursor: "pointer",
+          }}>
+            <div>
+              <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: localTemplate === t.id ? C.hazard : C.text, fontSize: 15 }}>{t.name}</div>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: C.textFaint, marginTop: 2, lineHeight: 1.4 }}>{t.blurb}</div>
+            </div>
+            {localTemplate === t.id && <CheckCircle2 size={18} color={C.hazard} style={{ flexShrink: 0, marginLeft: 8 }} />}
+          </button>
+        ))}
+        <button onClick={() => onSaveTemplate(localTemplate)} style={{ width: "100%", background: C.hazard, border: "none", borderRadius: 8, padding: "12px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", marginTop: 4 }}>
+          Save Strength Style
+        </button>
+
+        <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint, letterSpacing: 1, margin: "26px 0 10px" }}>EQUIPMENT</div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim, marginBottom: 12, lineHeight: 1.5 }}>
           Tell the agent what else you've got — it'll automatically work new options into your programming.
         </div>
@@ -1583,6 +1813,7 @@ function App() {
   const [logs, setLogs] = useState({});
   const [timerLogs, setTimerLogs] = useState([]);
   const [equipment, setEquipment] = useState(DEFAULT_EQUIPMENT);
+  const [template, setTemplate] = useState("default");
   const [week, setWeek] = useState(1);
   const [tab, setTab] = useState("program");
   const [showSettings, setShowSettings] = useState(false);
@@ -1596,7 +1827,8 @@ function App() {
       const l = await loadKey("logs", {});
       const tl = await loadKey("timerLogs", []);
       const eq = await loadKey("equipment", DEFAULT_EQUIPMENT);
-      setProfile(p); setLogs(l || {}); setTimerLogs(tl || []); setEquipment({ ...DEFAULT_EQUIPMENT, ...(eq || {}) });
+      const tmpl = await loadKey("template", "default");
+      setProfile(p); setLogs(l || {}); setTimerLogs(tl || []); setEquipment({ ...DEFAULT_EQUIPMENT, ...(eq || {}) }); setTemplate(tmpl || "default");
     })();
   }, []);
 
@@ -1610,6 +1842,11 @@ function App() {
   const handleSaveEquipment = async (eq) => {
     setEquipment(eq);
     await saveKey("equipment", eq);
+    setShowSettings(false);
+  };
+  const handleSaveTemplate = async (tmpl) => {
+    setTemplate(tmpl);
+    await saveKey("template", tmpl);
     setShowSettings(false);
   };
 
@@ -1670,7 +1907,7 @@ function App() {
       ) : (
         <>
           {tab === "program" && (
-            <ProgramTab profile={profile} logs={logs} equipment={equipment} saveEntry={saveEntry} saveDayMeta={saveDayMeta} week={week} setWeek={setWeek} engine={engine} onOpenTimer={() => setTab("timer")} onTimeWorkout={onTimeWorkout} />
+            <ProgramTab profile={profile} logs={logs} equipment={equipment} template={template} saveEntry={saveEntry} saveDayMeta={saveDayMeta} week={week} setWeek={setWeek} engine={engine} onOpenTimer={() => setTab("timer")} onTimeWorkout={onTimeWorkout} />
           )}
           {tab === "timer" && <TimerTab engine={engine} onLogResult={onLogTimerResult} context={timerContext} onClearContext={() => setTimerContext(null)} />}
           {tab === "log" && <LogTab logs={logs} timerLogs={timerLogs} />}
@@ -1678,7 +1915,7 @@ function App() {
           <button onClick={() => setShowSettings(true)} title="Settings" style={{ position: "fixed", top: "calc(env(safe-area-inset-top) + 14px)", right: 14, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 8, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", zIndex: 25 }}>
             <Settings size={16} color={C.textFaint} />
           </button>
-          {showSettings && <SettingsModal equipment={equipment} onSaveEquipment={handleSaveEquipment} onReset={handleReset} onClose={() => setShowSettings(false)} />}
+          {showSettings && <SettingsModal equipment={equipment} onSaveEquipment={handleSaveEquipment} template={template} onSaveTemplate={handleSaveTemplate} onReset={handleReset} onClose={() => setShowSettings(false)} />}
         </>
       )}
     </div>
