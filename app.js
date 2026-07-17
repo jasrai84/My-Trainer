@@ -1752,11 +1752,27 @@ function useWakeLock() {
 
 const DEFAULT_EQUIPMENT = { adjustableBench: false, rower: false, wallball: false };
 
-function SettingsModal({ equipment, onSaveEquipment, template, onSaveTemplate, profile, onSaveOneRMs, onReset, onClose }) {
+function SettingsModal({ equipment, onSaveEquipment, template, onSaveTemplate, profile, onSaveOneRMs, onExportData, onImportData, onReset, onClose }) {
   const [local, setLocal] = useState(equipment);
   const [localTemplate, setLocalTemplate] = useState(template);
   const [oneRMs, setOneRMs] = useState({ squat: profile.squat, swissBench: profile.swissBench, trapDeadlift: profile.trapDeadlift, ohp: profile.ohp });
+  const fileInputRef = useRef(null);
   const toggle = (key) => setLocal((l) => ({ ...l, [key]: !l[key] }));
+  const handleFileChange = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        onImportData(data);
+      } catch (err) {
+        window.alert("That file doesn't look like a valid My Trainer backup.");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
   const items = [
     { key: "adjustableBench", label: "Adjustable Bench", detail: "Unlocks Incline DB Bench Press as a Tuesday accessory" },
     { key: "rower", label: "Rower", detail: "Adds Row as a finisher option, and swaps in real rowing on the Hyrox sim" },
@@ -1772,6 +1788,18 @@ function SettingsModal({ equipment, onSaveEquipment, template, onSaveTemplate, p
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "flex-end", zIndex: 50 }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: C.bgRaised, width: "100%", maxHeight: "85vh", overflowY: "auto", borderRadius: "16px 16px 0 0", border: `1px solid ${C.line}`, borderBottom: "none", padding: "20px 18px calc(env(safe-area-inset-bottom) + 24px)" }}>
         <div style={{ fontFamily: FONT_DISPLAY, fontSize: 24, color: C.text, textTransform: "uppercase", marginBottom: 4 }}>Settings</div>
+
+        <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.hazard, letterSpacing: 1, margin: "18px 0 10px" }}>BACKUP & RESTORE</div>
+        <div style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.textDim, marginBottom: 12, lineHeight: 1.5 }}>
+          Your data lives only in this browser, nowhere else. Export a backup regularly — especially before clearing Safari data, switching phones, or reinstalling.
+        </div>
+        <button onClick={onExportData} style={{ width: "100%", background: C.hazard, border: "none", borderRadius: 8, padding: "12px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer", marginBottom: 8 }}>
+          Export Backup
+        </button>
+        <input type="file" accept="application/json" ref={fileInputRef} style={{ display: "none" }} onChange={handleFileChange} />
+        <button onClick={() => fileInputRef.current.click()} style={{ width: "100%", background: "none", border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px", color: C.textDim, fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
+          Import Backup
+        </button>
 
         <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.textFaint, letterSpacing: 1, margin: "18px 0 10px" }}>UPDATE 1RMS</div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.textDim, marginBottom: 12, lineHeight: 1.5 }}>
@@ -1898,6 +1926,32 @@ function App() {
     setShowSettings(false);
   };
 
+  const handleExportData = () => {
+    const data = { profile, logs, timerLogs, equipment, template, currentWeek: week, exportedAt: new Date().toISOString(), appVersion: "my-trainer-v1" };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `my-trainer-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportData = async (data) => {
+    if (!data || typeof data !== "object") { window.alert("That file doesn't look like a valid My Trainer backup."); return; }
+    if (!window.confirm("Import this backup? This will overwrite your current profile, logs, and settings.")) return;
+    if (data.profile) { setProfile(data.profile); await saveKey("profile", data.profile); }
+    if (data.logs) { setLogs(data.logs); await saveKey("logs", data.logs); }
+    if (data.timerLogs) { setTimerLogs(data.timerLogs); await saveKey("timerLogs", data.timerLogs); }
+    if (data.equipment) { const eq = { ...DEFAULT_EQUIPMENT, ...data.equipment }; setEquipment(eq); await saveKey("equipment", eq); }
+    if (data.template) { setTemplate(data.template); await saveKey("template", data.template); }
+    if (data.currentWeek) { setWeek(data.currentWeek); await saveKey("currentWeek", data.currentWeek); }
+    setShowSettings(false);
+    window.alert("Backup restored.");
+  };
+
   const saveEntry = useCallback((exId, entry) => {
     setLogs((prev) => {
       const wk = wKey(week);
@@ -1964,7 +2018,7 @@ function App() {
           <button onClick={() => setShowSettings(true)} title="Settings" style={{ position: "fixed", top: "calc(env(safe-area-inset-top) + 14px)", right: 14, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 8, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", zIndex: 25 }}>
             <Settings size={16} color={C.textFaint} />
           </button>
-          {showSettings && <SettingsModal equipment={equipment} onSaveEquipment={handleSaveEquipment} template={template} onSaveTemplate={handleSaveTemplate} profile={profile} onSaveOneRMs={handleSaveOneRMs} onReset={handleReset} onClose={() => setShowSettings(false)} />}
+          {showSettings && <SettingsModal equipment={equipment} onSaveEquipment={handleSaveEquipment} template={template} onSaveTemplate={handleSaveTemplate} profile={profile} onSaveOneRMs={handleSaveOneRMs} onExportData={handleExportData} onImportData={handleImportData} onReset={handleReset} onClose={() => setShowSettings(false)} />}
         </>
       )}
     </div>
