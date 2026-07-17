@@ -1628,6 +1628,8 @@ function ProgramTab({ profile, logs, equipment, template, saveEntry, saveDayMeta
       <ProgramSummary profile={profile} logs={logs} week={week} template={template} />
 
       <MiniTimerBar engine={engine} onOpen={onOpenTimer} sticky={false} />
+
+      <div style={{ background: `linear-gradient(135deg, ${C.hazardDim}, ${C.bgRaised})`, border: `1px solid ${C.hazardDim}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           <Flame size={16} color={C.hazard} style={{ marginTop: 2, flexShrink: 0 }} />
           <div style={{ fontFamily: FONT_BODY, fontStyle: "italic", color: C.text, fontSize: 18, lineHeight: 1.5 }}>"{QUOTES[quoteIdx]}"</div>
