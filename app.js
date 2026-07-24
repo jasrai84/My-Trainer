@@ -1805,39 +1805,51 @@ async function lookupBarcode(code) {
 
 function BarcodeScannerModal({ onDetected, onClose }) {
   const scannerRef = useRef(null);
+  const runningRef = useRef(false);
   const containerId = "barcode-reader";
   const [status, setStatus] = useState("Point your camera at the barcode…");
+
+  const safeStop = () => {
+    if (scannerRef.current && runningRef.current) {
+      runningRef.current = false;
+      try { scannerRef.current.stop().catch(() => {}); } catch (e) {}
+    }
+  };
 
   useEffect(() => {
     if (!window.Html5Qrcode) {
       setStatus("Scanner library failed to load — check your connection and try again.");
       return;
     }
-    const html5Qrcode = new window.Html5Qrcode(containerId, {
-      formatsToSupport: [
-        window.Html5QrcodeSupportedFormats.EAN_13,
-        window.Html5QrcodeSupportedFormats.EAN_8,
-        window.Html5QrcodeSupportedFormats.UPC_A,
-        window.Html5QrcodeSupportedFormats.UPC_E,
-      ],
-      verbose: false,
-    });
-    scannerRef.current = html5Qrcode;
-    html5Qrcode.start(
-      { facingMode: "environment" },
-      { fps: 10, qrbox: { width: 260, height: 140 } },
-      (decodedText) => {
-        html5Qrcode.stop().catch(() => {});
-        onDetected(decodedText);
-      },
-      () => {} // per-frame scan misses — ignore, keep scanning
-    ).catch(() => {
-      setStatus("Couldn't access the camera — check camera permissions for this site in your browser settings.");
-    });
+    try {
+      const html5Qrcode = new window.Html5Qrcode(containerId, {
+        formatsToSupport: [
+          window.Html5QrcodeSupportedFormats.EAN_13,
+          window.Html5QrcodeSupportedFormats.EAN_8,
+          window.Html5QrcodeSupportedFormats.UPC_A,
+          window.Html5QrcodeSupportedFormats.UPC_E,
+        ],
+        verbose: false,
+      });
+      scannerRef.current = html5Qrcode;
+      html5Qrcode.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 260, height: 140 } },
+        (decodedText) => {
+          safeStop();
+          onDetected(decodedText);
+        },
+        () => {} // per-frame scan misses — ignore, keep scanning
+      ).then(() => {
+        runningRef.current = true;
+      }).catch(() => {
+        setStatus("Couldn't access the camera — check camera permissions for this site in your browser settings.");
+      });
+    } catch (err) {
+      setStatus("Scanner failed to start: " + (err && err.message ? err.message : "unknown error"));
+    }
 
-    return () => {
-      if (scannerRef.current) scannerRef.current.stop().catch(() => {});
-    };
+    return () => { safeStop(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1845,7 +1857,7 @@ function BarcodeScannerModal({ onDetected, onClose }) {
     <div style={{ position: "fixed", inset: 0, background: "#000", zIndex: 60, display: "flex", flexDirection: "column" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "calc(env(safe-area-inset-top) + 14px) 16px 14px" }}>
         <span style={{ fontFamily: FONT_DISPLAY, color: "#fff", fontSize: 18, textTransform: "uppercase" }}>Scan Barcode</span>
-        <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={22} color="#fff" /></button>
+        <button onClick={() => { safeStop(); onClose(); }} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={22} color="#fff" /></button>
       </div>
       <div id={containerId} style={{ flex: 1 }} />
       <div style={{ padding: 16, textAlign: "center", color: "#9CA3A6", fontFamily: FONT_BODY, fontSize: 14 }}>{status}</div>
@@ -2559,5 +2571,33 @@ function App() {
   );
 }
 
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    console.error("My Trainer crashed:", error, info);
+  }
+  render() {
+    if (this.state.error) {
+      const msg = this.state.error && this.state.error.message ? this.state.error.message : String(this.state.error);
+      return (
+        <div style={{ minHeight: "100vh", background: "#17191A", padding: "calc(env(safe-area-inset-top) + 30px) 20px 30px", fontFamily: "'Work Sans', sans-serif" }}>
+          <div style={{ fontFamily: "'Oswald', sans-serif", fontSize: 24, color: "#FF5A1F", textTransform: "uppercase", marginBottom: 12 }}>Something broke</div>
+          <div style={{ color: "#EDEBE6", fontSize: 14, lineHeight: 1.5, marginBottom: 20, fontFamily: "'JetBrains Mono', monospace", whiteSpace: "pre-wrap" }}>{msg}</div>
+          <button onClick={() => this.setState({ error: null })} style={{ background: "#FF5A1F", border: "none", borderRadius: 8, padding: "12px 20px", color: "#1A1A1A", fontFamily: "'Oswald', sans-serif", fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
+            Try Again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const _root = ReactDOM.createRoot(document.getElementById("root"));
-_root.render(<App />);
+_root.render(<ErrorBoundary><App /></ErrorBoundary>);
