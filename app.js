@@ -1797,9 +1797,17 @@ async function lookupBarcode(code) {
   if (data.status !== 1 || !data.product) return null;
   const p = data.product;
   const protein100 = p.nutriments && (p.nutriments.proteins_100g ?? p.nutriments["proteins_100g"]);
+  // serving_size is usually free text like "30 g" or "1 scoop (32g)" — pull the first gram figure out of it.
+  let servingGrams = null;
+  const servingSource = p.serving_size || p.serving_quantity;
+  if (servingSource) {
+    const m = String(servingSource).match(/([\d.]+)\s*g\b/i);
+    if (m) servingGrams = parseFloat(m[1]);
+  }
   return {
     name: p.product_name || p.generic_name || `Product ${code}`,
     p100: typeof protein100 === "number" ? protein100 : null,
+    servingGrams,
   };
 }
 
@@ -1912,6 +1920,9 @@ function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nut
   const [foodName, setFoodName] = useState("");
   const [grams, setGrams] = useState("");
   const [customP100, setCustomP100] = useState("");
+  const [servingSize, setServingSize] = useState(null); // grams per serving, when known
+  const [servingCount, setServingCount] = useState(1);
+  const [addError, setAddError] = useState("");
   const [showRecipeAsk, setShowRecipeAsk] = useState(false);
   const [ingredientsInput, setIngredientsInput] = useState("");
   const [aiRecipe, setAiRecipe] = useState(null);
@@ -1923,6 +1934,10 @@ function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nut
   const [scanError, setScanError] = useState("");
   const fileInputRef = useRef(null);
 
+  useEffect(() => {
+    if (servingSize != null) setGrams(String(Math.round(servingSize * servingCount * 100) / 100));
+  }, [servingSize, servingCount]);
+
   const handleBarcodeDetected = async (code) => {
     setShowScanner(false);
     setScanBusy(true);
@@ -1933,10 +1948,14 @@ function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nut
         setScanError(`No match found for barcode ${code} — try manual entry instead.`);
       } else if (product.p100 == null) {
         setFoodName(product.name);
+        setServingSize(null);
         setScanError(`Found "${product.name}" but it has no protein data on file — enter protein per 100g manually.`);
       } else {
         setFoodName(product.name);
         setCustomP100(String(product.p100));
+        setServingCount(1);
+        setServingSize(product.servingGrams || null);
+        if (!product.servingGrams) setGrams(""); // no known serving size — fall back to manual grams
       }
     } catch (err) {
       setScanError("Couldn't look that barcode up — check your connection and try again.");
@@ -1957,12 +1976,14 @@ function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nut
     : customP100 ? (parseFloat(customP100) / 100) * (parseFloat(grams) || 0) : null;
 
   const handleAdd = () => {
+    setAddError("");
     const g = parseFloat(grams);
-    if (!foodName || !g) return;
+    if (!foodName) { setAddError("Enter a food name first."); return; }
+    if (!g) { setAddError("Enter a weight in grams (or set a serving size below)."); return; }
     const p100 = matched ? matched.p100 : parseFloat(customP100);
-    if (!p100) return;
+    if (!p100) { setAddError("Enter protein per 100g for this food."); return; }
     onAddFood({ id: Date.now() + Math.random(), name: foodName, grams: g, protein: Math.round((p100 / 100) * g * 10) / 10, time: new Date().toISOString(), source: "manual" });
-    setFoodName(""); setGrams(""); setCustomP100("");
+    setFoodName(""); setGrams(""); setCustomP100(""); setServingSize(null); setServingCount(1);
   };
 
   const quickLogRecipe = (r) => {
@@ -2085,15 +2106,33 @@ function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nut
               {FOOD_DB.map((f) => <option key={f.name} value={f.name} />)}
             </datalist>
             <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-              <input type="number" value={grams} onChange={(e) => setGrams(e.target.value)} placeholder="grams"
-                style={{ flex: 1, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_MONO, fontSize: 15, boxSizing: "border-box", outline: "none" }} />
+              <input type="number" value={grams} onChange={(e) => { setGrams(e.target.value); if (servingSize != null) setServingSize(null); }} placeholder="grams"
+                style={{ flex: 1, minWidth: 0, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_MONO, fontSize: 15, boxSizing: "border-box", outline: "none" }} />
               {!matched && foodName && (
                 <input type="number" value={customP100} onChange={(e) => setCustomP100(e.target.value)} placeholder="protein/100g"
-                  style={{ flex: 1, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_MONO, fontSize: 15, boxSizing: "border-box", outline: "none" }} />
+                  style={{ flex: 1, minWidth: 0, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_MONO, fontSize: 15, boxSizing: "border-box", outline: "none" }} />
               )}
             </div>
+            {servingSize != null && (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+                <span style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, letterSpacing: 0.5 }}>SERVINGS</span>
+                <button onClick={() => setServingCount((c) => Math.max(1, c - 1))} style={{ width: 26, height: 26, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgRaised, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Minus size={12} color={C.text} /></button>
+                <span style={{ fontFamily: FONT_MONO, fontSize: 15, color: C.text, minWidth: 16, textAlign: "center" }}>{servingCount}</span>
+                <button onClick={() => setServingCount((c) => c + 1)} style={{ width: 26, height: 26, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgRaised, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Plus size={12} color={C.text} /></button>
+                <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textFaint }}>×</span>
+                <input type="number" value={servingSize} onChange={(e) => setServingSize(parseFloat(e.target.value) || 0)}
+                  style={{ width: 56, minWidth: 0, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 5, padding: "5px 6px", color: C.text, fontFamily: FONT_MONO, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textFaint }}>g/serving = {grams}g</span>
+              </div>
+            )}
             {!matched && foodName && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textFaint, marginBottom: 8 }}>Not in our list — enter protein per 100g and we'll calculate the rest. Scanning a barcode fills this in automatically.</div>}
+            {servingSize == null && foodName && (
+              <button onClick={() => { setServingSize(parseFloat(grams) || 30); setServingCount(1); }} style={{ background: "none", border: "none", color: C.signal, fontFamily: FONT_MONO, fontSize: 12, cursor: "pointer", padding: 0, marginBottom: 8, display: "block" }}>
+                + Use servings instead of grams
+              </button>
+            )}
             {previewProtein != null && <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.good, marginBottom: 8 }}>≈ {Math.round(previewProtein * 10) / 10}g protein</div>}
+            {addError && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.hazard, marginBottom: 8 }}>{addError}</div>}
             <button onClick={handleAdd} style={{ width: "100%", background: C.hazard, border: "none", borderRadius: 6, padding: "10px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>Add to Log</button>
 
             <input type="file" accept="image/*" capture="environment" ref={fileInputRef} style={{ display: "none" }} onChange={handlePhotoChange} />
