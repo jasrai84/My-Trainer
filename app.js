@@ -619,10 +619,19 @@ async function saveKey(key, value) {
    ======================================================================= */
 let _audioCtx = null;
 function getAudioCtx() {
+  if (_audioCtx && _audioCtx.state === "closed") _audioCtx = null;
   if (!_audioCtx) {
     try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; }
   }
-  if (_audioCtx.state === "suspended") _audioCtx.resume().catch(() => {});
+  // iOS can leave the context "suspended" or "interrupted" after camera/mic use (e.g. the
+  // barcode scanner). If resume() fails, ditch this context so the next call builds a fresh one.
+  if (_audioCtx.state === "suspended" || _audioCtx.state === "interrupted") {
+    const stale = _audioCtx;
+    stale.resume().catch(() => {
+      try { stale.close(); } catch (e) {}
+      if (_audioCtx === stale) _audioCtx = null;
+    });
+  }
   return _audioCtx;
 }
 function beep(freq = 880, dur = 150, vol = 0.15, type = "sine") {
@@ -1822,6 +1831,9 @@ function BarcodeScannerModal({ onDetected, onClose }) {
       runningRef.current = false;
       try { scannerRef.current.stop().catch(() => {}); } catch (e) {}
     }
+    // Camera use can leave the audio session in a bad state on iOS — force a rebuild.
+    if (_audioCtx) { try { _audioCtx.close(); } catch (e) {} _audioCtx = null; }
+    setTimeout(() => getAudioCtx(), 300);
   };
 
   useEffect(() => {
@@ -1918,6 +1930,7 @@ function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nut
   const [bwInput, setBwInput] = useState(nutritionSettings.bodyweightKg || profile?.bodyweight || "");
   const [factor, setFactor] = useState(nutritionSettings.factor || 2.0);
   const [foodName, setFoodName] = useState("");
+  const [foodDropdownOpen, setFoodDropdownOpen] = useState(false);
   const [grams, setGrams] = useState("");
   const [customP100, setCustomP100] = useState("");
   const [servingSize, setServingSize] = useState(null); // grams per serving, when known
@@ -2100,11 +2113,29 @@ function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nut
               <Barcode size={15} /> {scanBusy ? "Looking up…" : "Scan Barcode"}
             </button>
             {scanError && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.hazard, marginBottom: 10, lineHeight: 1.4 }}>{scanError}</div>}
-            <input value={foodName} onChange={(e) => setFoodName(e.target.value)} placeholder="e.g. Chicken breast" list="food-suggestions"
-              style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_BODY, fontSize: 15, boxSizing: "border-box", outline: "none", marginBottom: 8 }} />
-            <datalist id="food-suggestions">
-              {FOOD_DB.map((f) => <option key={f.name} value={f.name} />)}
-            </datalist>
+            <div style={{ position: "relative", marginBottom: 8 }}>
+              <input value={foodName} onChange={(e) => { setFoodName(e.target.value); setFoodDropdownOpen(true); }}
+                onFocus={() => setFoodDropdownOpen(true)}
+                onBlur={() => setTimeout(() => setFoodDropdownOpen(false), 150)}
+                placeholder="e.g. Chicken breast — search or type your own"
+                style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_BODY, fontSize: 15, boxSizing: "border-box", outline: "none" }} />
+              {foodDropdownOpen && foodName && (() => {
+                const q = foodName.toLowerCase();
+                const results = FOOD_DB.filter((f) => f.name.toLowerCase().includes(q)).slice(0, 8);
+                return (
+                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, marginTop: 4, maxHeight: 200, overflowY: "auto", zIndex: 5, boxShadow: "0 6px 16px rgba(0,0,0,0.4)" }}>
+                    {results.length > 0 ? results.map((f) => (
+                      <button key={f.name} onClick={() => { setFoodName(f.name); setFoodDropdownOpen(false); }}
+                        style={{ width: "100%", textAlign: "left", background: "none", border: "none", padding: "10px 12px", color: C.text, fontFamily: FONT_BODY, fontSize: 14, cursor: "pointer", borderBottom: `1px solid ${C.lineFaint}` }}>
+                        {f.name} <span style={{ color: C.textFaint, fontFamily: FONT_MONO, fontSize: 12 }}>· {f.p100}g/100g</span>
+                      </button>
+                    )) : (
+                      <div style={{ padding: "10px 12px", color: C.textFaint, fontFamily: FONT_BODY, fontSize: 12.5 }}>Not in our list — enter protein per 100g below and we'll calculate the rest.</div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
             <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
               <input type="number" value={grams} onChange={(e) => { setGrams(e.target.value); if (servingSize != null) setServingSize(null); }} placeholder="grams"
                 style={{ flex: 1, minWidth: 0, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_MONO, fontSize: 15, boxSizing: "border-box", outline: "none" }} />
