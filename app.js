@@ -139,33 +139,33 @@ function wKey(week) { return `w${week}`; }
 // Protein grams per 100g, cooked/as-eaten where relevant. Covers common staples —
 // manual entries not in here just ask for a protein-per-100g value directly.
 const FOOD_DB = [
-  { name: "Chicken breast", p100: 31 },
-  { name: "Chicken thigh", p100: 26 },
-  { name: "Turkey breast", p100: 29 },
-  { name: "Salmon", p100: 25 },
-  { name: "Tuna (canned, drained)", p100: 26 },
-  { name: "Cod", p100: 23 },
-  { name: "Prawns", p100: 24 },
-  { name: "Beef mince (lean)", p100: 26 },
-  { name: "Sirloin steak", p100: 29 },
-  { name: "Pork loin", p100: 27 },
-  { name: "Eggs (whole)", p100: 13 },
-  { name: "Egg whites", p100: 11 },
-  { name: "Greek yogurt (plain)", p100: 10 },
-  { name: "Cottage cheese", p100: 11 },
-  { name: "Whey protein powder", p100: 80 },
-  { name: "Milk", p100: 3.4 },
-  { name: "Cheddar cheese", p100: 25 },
-  { name: "Tofu", p100: 8 },
-  { name: "Tempeh", p100: 19 },
-  { name: "Edamame", p100: 11 },
-  { name: "Lentils (cooked)", p100: 9 },
-  { name: "Chickpeas (cooked)", p100: 9 },
-  { name: "Black beans (cooked)", p100: 8.9 },
-  { name: "Quinoa (cooked)", p100: 4.4 },
-  { name: "Oats", p100: 13 },
-  { name: "Almonds", p100: 21 },
-  { name: "Peanut butter", p100: 25 },
+  { name: "Chicken breast", p100: 31, unit: "g" },
+  { name: "Chicken thigh", p100: 26, unit: "g" },
+  { name: "Turkey breast", p100: 29, unit: "g" },
+  { name: "Salmon", p100: 25, unit: "g" },
+  { name: "Tuna (canned, drained)", p100: 26, unit: "g" },
+  { name: "Cod", p100: 23, unit: "g" },
+  { name: "Prawns", p100: 24, unit: "g" },
+  { name: "Beef mince (lean)", p100: 26, unit: "g" },
+  { name: "Sirloin steak", p100: 29, unit: "g" },
+  { name: "Pork loin", p100: 27, unit: "g" },
+  { name: "Eggs (whole)", p100: 13, unit: "g", servingGrams: 50, servingLabel: "egg" },
+  { name: "Egg whites", p100: 11, unit: "g", servingGrams: 33, servingLabel: "egg white" },
+  { name: "Greek yogurt (plain)", p100: 10, unit: "g" },
+  { name: "Cottage cheese", p100: 11, unit: "g" },
+  { name: "Whey protein powder", p100: 80, unit: "g", servingGrams: 30, servingLabel: "scoop" },
+  { name: "Milk", p100: 3.4, unit: "ml" },
+  { name: "Cheddar cheese", p100: 25, unit: "g" },
+  { name: "Tofu", p100: 8, unit: "g" },
+  { name: "Tempeh", p100: 19, unit: "g" },
+  { name: "Edamame", p100: 11, unit: "g" },
+  { name: "Lentils (cooked)", p100: 9, unit: "g" },
+  { name: "Chickpeas (cooked)", p100: 9, unit: "g" },
+  { name: "Black beans (cooked)", p100: 8.9, unit: "g" },
+  { name: "Quinoa (cooked)", p100: 4.4, unit: "g" },
+  { name: "Oats", p100: 13, unit: "g" },
+  { name: "Almonds", p100: 21, unit: "g" },
+  { name: "Peanut butter", p100: 25, unit: "g", servingGrams: 32, servingLabel: "tbsp" },
 ];
 function matchFood(name) {
   const q = name.trim().toLowerCase();
@@ -1935,6 +1935,8 @@ function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nut
   const [customP100, setCustomP100] = useState("");
   const [servingSize, setServingSize] = useState(null); // grams per serving, when known
   const [servingCount, setServingCount] = useState(1);
+  const [servingLabel, setServingLabel] = useState("serving");
+  const [weightUnit, setWeightUnit] = useState("g"); // "g" or "ml" — display label only, 1ml treated as 1g for protein math
   const [addError, setAddError] = useState("");
   const [showRecipeAsk, setShowRecipeAsk] = useState(false);
   const [ingredientsInput, setIngredientsInput] = useState("");
@@ -1967,6 +1969,7 @@ function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nut
         setFoodName(product.name);
         setCustomP100(String(product.p100));
         setServingCount(1);
+        setServingLabel("serving");
         setServingSize(product.servingGrams || null);
         if (!product.servingGrams) setGrams(""); // no known serving size — fall back to manual grams
       }
@@ -1992,11 +1995,12 @@ function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nut
     setAddError("");
     const g = parseFloat(grams);
     if (!foodName) { setAddError("Enter a food name first."); return; }
-    if (!g) { setAddError("Enter a weight in grams (or set a serving size below)."); return; }
+    if (!g) { setAddError(`Enter a weight in ${weightUnit} (or count servings instead).`); return; }
     const p100 = matched ? matched.p100 : parseFloat(customP100);
-    if (!p100) { setAddError("Enter protein per 100g for this food."); return; }
-    onAddFood({ id: Date.now() + Math.random(), name: foodName, grams: g, protein: Math.round((p100 / 100) * g * 10) / 10, time: new Date().toISOString(), source: "manual" });
-    setFoodName(""); setGrams(""); setCustomP100(""); setServingSize(null); setServingCount(1);
+    if (!p100) { setAddError(`Enter protein per 100${weightUnit} for this food.`); return; }
+    const servingNote = servingSize != null ? `${servingCount} ${servingLabel}${servingCount === 1 ? "" : "s"}` : null;
+    onAddFood({ id: Date.now() + Math.random(), name: foodName, grams: g, unit: weightUnit, servingNote, protein: Math.round((p100 / 100) * g * 10) / 10, time: new Date().toISOString(), source: "manual" });
+    setFoodName(""); setGrams(""); setCustomP100(""); setServingSize(null); setServingCount(1); setServingLabel("serving"); setWeightUnit("g");
   };
 
   const quickLogRecipe = (r) => {
@@ -2125,7 +2129,17 @@ function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nut
                 return (
                   <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, marginTop: 4, maxHeight: 200, overflowY: "auto", zIndex: 5, boxShadow: "0 6px 16px rgba(0,0,0,0.4)" }}>
                     {results.length > 0 ? results.map((f) => (
-                      <button key={f.name} onClick={() => { setFoodName(f.name); setFoodDropdownOpen(false); }}
+                      <button key={f.name} onClick={() => {
+                        setFoodName(f.name); setFoodDropdownOpen(false);
+                        setWeightUnit(f.unit || "g");
+                        if (f.servingGrams) {
+                          setServingSize(f.servingGrams);
+                          setServingLabel(f.servingLabel || "serving");
+                          setServingCount(1);
+                        } else {
+                          setServingSize(null);
+                        }
+                      }}
                         style={{ width: "100%", textAlign: "left", background: "none", border: "none", padding: "10px 12px", color: C.text, fontFamily: FONT_BODY, fontSize: 14, cursor: "pointer", borderBottom: `1px solid ${C.lineFaint}` }}>
                         {f.name} <span style={{ color: C.textFaint, fontFamily: FONT_MONO, fontSize: 12 }}>· {f.p100}g/100g</span>
                       </button>
@@ -2136,30 +2150,42 @@ function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nut
                 );
               })()}
             </div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-              <input type="number" value={grams} onChange={(e) => { setGrams(e.target.value); if (servingSize != null) setServingSize(null); }} placeholder="grams"
-                style={{ flex: 1, minWidth: 0, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_MONO, fontSize: 15, boxSizing: "border-box", outline: "none" }} />
-              {!matched && foodName && (
-                <input type="number" value={customP100} onChange={(e) => setCustomP100(e.target.value)} placeholder="protein/100g"
+            {servingSize != null ? (
+              <div style={{ background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: 12, marginBottom: 8 }}>
+                <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, letterSpacing: 0.5, marginBottom: 8 }}>HOW MANY {servingLabel.toUpperCase()}{servingCount === 1 ? "" : "S"}?</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <button onClick={() => setServingCount((c) => Math.max(1, c - 1))} style={{ width: 34, height: 34, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Minus size={15} color={C.text} /></button>
+                  <span style={{ fontFamily: FONT_DISPLAY, fontSize: 22, color: C.text, minWidth: 24, textAlign: "center" }}>{servingCount}</span>
+                  <button onClick={() => setServingCount((c) => c + 1)} style={{ width: 34, height: 34, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Plus size={15} color={C.text} /></button>
+                  <span style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim }}>{servingLabel}{servingCount === 1 ? "" : "s"} = {grams}{weightUnit}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
+                  <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textFaint }}>1 {servingLabel} =</span>
+                  <input type="number" value={servingSize} onChange={(e) => setServingSize(parseFloat(e.target.value) || 0)}
+                    style={{ width: 56, minWidth: 0, background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 5, padding: "5px 6px", color: C.text, fontFamily: FONT_MONO, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
+                  <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textFaint }}>{weightUnit}</span>
+                  <button onClick={() => setServingSize(null)} style={{ marginLeft: "auto", background: "none", border: "none", color: C.signal, fontFamily: FONT_MONO, fontSize: 11, cursor: "pointer", padding: 0 }}>Switch to weight</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                <input type="number" value={grams} onChange={(e) => setGrams(e.target.value)} placeholder={weightUnit === "ml" ? "millilitres" : "grams"}
                   style={{ flex: 1, minWidth: 0, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_MONO, fontSize: 15, boxSizing: "border-box", outline: "none" }} />
-              )}
-            </div>
-            {servingSize != null && (
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
-                <span style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, letterSpacing: 0.5 }}>SERVINGS</span>
-                <button onClick={() => setServingCount((c) => Math.max(1, c - 1))} style={{ width: 26, height: 26, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgRaised, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Minus size={12} color={C.text} /></button>
-                <span style={{ fontFamily: FONT_MONO, fontSize: 15, color: C.text, minWidth: 16, textAlign: "center" }}>{servingCount}</span>
-                <button onClick={() => setServingCount((c) => c + 1)} style={{ width: 26, height: 26, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgRaised, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Plus size={12} color={C.text} /></button>
-                <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textFaint }}>×</span>
-                <input type="number" value={servingSize} onChange={(e) => setServingSize(parseFloat(e.target.value) || 0)}
-                  style={{ width: 56, minWidth: 0, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 5, padding: "5px 6px", color: C.text, fontFamily: FONT_MONO, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
-                <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textFaint }}>g/serving = {grams}g</span>
+                <div style={{ display: "flex", border: `1px solid ${C.line}`, borderRadius: 6, overflow: "hidden", flexShrink: 0 }}>
+                  {["g", "ml"].map((u) => (
+                    <button key={u} onClick={() => setWeightUnit(u)} style={{ padding: "0 14px", background: weightUnit === u ? C.hazardDim : C.bgRaised, color: weightUnit === u ? C.hazard : C.textDim, border: "none", fontFamily: FONT_MONO, fontSize: 14, cursor: "pointer" }}>{u}</button>
+                  ))}
+                </div>
+                {!matched && foodName && (
+                  <input type="number" value={customP100} onChange={(e) => setCustomP100(e.target.value)} placeholder={`protein/100${weightUnit}`}
+                    style={{ flex: 1, minWidth: 0, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_MONO, fontSize: 15, boxSizing: "border-box", outline: "none" }} />
+                )}
               </div>
             )}
-            {!matched && foodName && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textFaint, marginBottom: 8 }}>Not in our list — enter protein per 100g and we'll calculate the rest. Scanning a barcode fills this in automatically.</div>}
+            {!matched && foodName && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textFaint, marginBottom: 8 }}>Not in our list — enter protein per 100{weightUnit} and we'll calculate the rest. Scanning a barcode fills this in automatically.</div>}
             {servingSize == null && foodName && (
-              <button onClick={() => { setServingSize(parseFloat(grams) || 30); setServingCount(1); }} style={{ background: "none", border: "none", color: C.signal, fontFamily: FONT_MONO, fontSize: 12, cursor: "pointer", padding: 0, marginBottom: 8, display: "block" }}>
-                + Use servings instead of grams
+              <button onClick={() => { setServingSize(parseFloat(grams) || 30); setServingLabel("serving"); setServingCount(1); }} style={{ background: "none", border: "none", color: C.signal, fontFamily: FONT_MONO, fontSize: 12, cursor: "pointer", padding: 0, marginBottom: 8, display: "block" }}>
+                + Count servings instead ({weightUnit === "ml" ? "e.g. glasses, cups" : "e.g. eggs, scoops"})
               </button>
             )}
             {previewProtein != null && <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.good, marginBottom: 8 }}>≈ {Math.round(previewProtein * 10) / 10}g protein</div>}
@@ -2207,7 +2233,7 @@ function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nut
               <div>
                 <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 14 }}>{entry.name}</div>
                 <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint, marginTop: 2 }}>
-                  {entry.grams ? `${entry.grams}g · ` : ""}{new Date(entry.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  {entry.servingNote ? `${entry.servingNote} (${entry.grams}${entry.unit || "g"}) · ` : entry.grams ? `${entry.grams}${entry.unit || "g"} · ` : ""}{new Date(entry.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                 </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
