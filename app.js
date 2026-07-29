@@ -29,11 +29,6 @@ const RotateCcw = (p) => <Icon {...p}><polyline points="1 4 1 10 7 10" /><path d
 const ClipboardList = (p) => <Icon {...p}><rect x="8" y="2" width="8" height="4" rx="1" /><path d="M9 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3" /><line x1="8" y1="11" x2="16" y2="11" /><line x1="8" y1="15" x2="16" y2="15" /></Icon>;
 const Trash2 = (p) => <Icon {...p}><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /></Icon>;
 const HelpCircle = (p) => <Icon {...p}><circle cx="12" cy="12" r="9" /><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 1.5-2.5 2-2.5 3.5" /><line x1="12" y1="17" x2="12.01" y2="17" /></Icon>;
-const Utensils = (p) => <Icon {...p}><path d="M3 2v7c0 1.1.9 2 2 2s2-.9 2-2V2M5 2v20M15 2c-1.1 0-2 2-2 5s.9 5 2 5 2-2 2-5-.9-5-2-5zM19 2v20" /></Icon>;
-const Camera = (p) => <Icon {...p}><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></Icon>;
-const Sparkles = (p) => <Icon {...p}><path d="M12 3v4M12 17v4M5 5l2.5 2.5M16.5 16.5L19 19M3 12h4M17 12h4M5 19l2.5-2.5M16.5 7.5L19 5" /></Icon>;
-const X = (p) => <Icon {...p}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></Icon>;
-const Barcode = (p) => <Icon {...p}><path d="M3 5v14M7 5v14M11 5v10M15 5v14M19 5v10M21 5v14" /></Icon>;
 
 /* =========================================================================
    MINI LINE CHART — tiny dependency-free stand-in for recharts, just
@@ -132,72 +127,6 @@ function roundBar(w) { return Math.max(0, Math.round(w / 1.25) * 1.25); }
 function roundAdjDb(w) { const [lo, hi] = DB_ADJ_RANGE; return Math.min(hi, Math.max(lo, Math.round(w))); }
 function fmtKg(w) { if (w == null) return ""; return (Math.round(w * 100) / 100).toString().replace(/\.0+$/, "").replace(/(\.\d)0$/, "$1"); }
 function wKey(week) { return `w${week}`; }
-
-/* =========================================================================
-   NUTRITION ENGINE
-   ======================================================================= */
-// Protein grams per 100g, cooked/as-eaten where relevant. Covers common staples —
-// manual entries not in here just ask for a protein-per-100g value directly.
-const FOOD_DB = [
-  { name: "Chicken breast", p100: 31, unit: "g" },
-  { name: "Chicken thigh", p100: 26, unit: "g" },
-  { name: "Turkey breast", p100: 29, unit: "g" },
-  { name: "Salmon", p100: 25, unit: "g" },
-  { name: "Tuna (canned, drained)", p100: 26, unit: "g" },
-  { name: "Cod", p100: 23, unit: "g" },
-  { name: "Prawns", p100: 24, unit: "g" },
-  { name: "Beef mince (lean)", p100: 26, unit: "g" },
-  { name: "Sirloin steak", p100: 29, unit: "g" },
-  { name: "Pork loin", p100: 27, unit: "g" },
-  { name: "Eggs (whole)", p100: 13, unit: "g", servingGrams: 50, servingLabel: "egg" },
-  { name: "Egg whites", p100: 11, unit: "g", servingGrams: 33, servingLabel: "egg white" },
-  { name: "Greek yogurt (plain)", p100: 10, unit: "g" },
-  { name: "Cottage cheese", p100: 11, unit: "g" },
-  { name: "Whey protein powder", p100: 80, unit: "g", servingGrams: 30, servingLabel: "scoop" },
-  { name: "Milk", p100: 3.4, unit: "ml" },
-  { name: "Cheddar cheese", p100: 25, unit: "g" },
-  { name: "Tofu", p100: 8, unit: "g" },
-  { name: "Tempeh", p100: 19, unit: "g" },
-  { name: "Edamame", p100: 11, unit: "g" },
-  { name: "Lentils (cooked)", p100: 9, unit: "g" },
-  { name: "Chickpeas (cooked)", p100: 9, unit: "g" },
-  { name: "Black beans (cooked)", p100: 8.9, unit: "g" },
-  { name: "Quinoa (cooked)", p100: 4.4, unit: "g" },
-  { name: "Oats", p100: 13, unit: "g" },
-  { name: "Almonds", p100: 21, unit: "g" },
-  { name: "Peanut butter", p100: 25, unit: "g", servingGrams: 32, servingLabel: "tbsp" },
-];
-function matchFood(name) {
-  const q = name.trim().toLowerCase();
-  if (!q) return null;
-  return FOOD_DB.find((f) => f.name.toLowerCase() === q) || FOOD_DB.find((f) => f.name.toLowerCase().includes(q) || q.includes(f.name.toLowerCase())) || null;
-}
-function computeProteinTarget(bodyweightKg, factor) {
-  if (!bodyweightKg) return null;
-  return Math.round(bodyweightKg * factor);
-}
-function todayKey() { return new Date().toISOString().slice(0, 10); }
-
-// Quick recipes built entirely from common staples — no specialty shopping required.
-// Filtered/rotated against how much protein is left for the day.
-const RECIPE_DB = [
-  { name: "3-Egg + Greek Yogurt Scramble", protein: 28, staples: ["eggs", "greek yogurt", "cheese"], steps: "Scramble 3 eggs, fold in 2 tbsp Greek yogurt off the heat for extra creaminess and protein. Top with a little cheese." },
-  { name: "Tuna & Cottage Cheese Bowl", protein: 35, staples: ["tuna", "cottage cheese"], steps: "Mix a drained tin of tuna with a big scoop of cottage cheese, black pepper, and a squeeze of lemon if you have it. Zero cooking." },
-  { name: "Chicken & Rice Quick Bowl", protein: 40, staples: ["chicken breast", "rice"], steps: "Pan-sear a diced chicken breast, serve over microwave rice with whatever sauce/veg you've got." },
-  { name: "Peanut Butter Protein Oats", protein: 20, staples: ["oats", "peanut butter", "milk"], steps: "Cook oats with milk, stir through a tbsp of peanut butter and a scoop of whey if you have it." },
-  { name: "Whey Shake + Banana", protein: 25, staples: ["whey protein powder", "milk"], steps: "Blend or shake a scoop of whey with milk (or water) and a banana. Under 2 minutes." },
-  { name: "Lentil & Egg Power Bowl", protein: 22, staples: ["lentils", "eggs"], steps: "Warm through cooked/tinned lentils, top with a couple of fried or boiled eggs and hot sauce." },
-  { name: "Cheese & Ham Omelette", protein: 30, staples: ["eggs", "cheese"], steps: "3-egg omelette folded with grated cheese and any deli meat you've got in the fridge." },
-  { name: "Greek Yogurt + Nuts + Honey", protein: 18, staples: ["greek yogurt", "almonds"], steps: "A big bowl of Greek yogurt with a handful of almonds and a drizzle of honey — no cooking." },
-  { name: "Tofu & Edamame Stir-Fry", protein: 24, staples: ["tofu", "edamame"], steps: "Pan-fry cubed tofu until crispy, toss with steamed edamame and soy sauce." },
-  { name: "Steak & Egg Plate", protein: 45, staples: ["sirloin steak", "eggs"], steps: "Sear a steak a few minutes each side, rest it, serve with 2 fried eggs on the side." },
-];
-function suggestedRecipes(remainingProtein, seed) {
-  // Prefer recipes that get close to (without wildly overshooting) what's left today.
-  const scored = RECIPE_DB.map((r) => ({ ...r, diff: Math.abs(r.protein - Math.max(remainingProtein, 15)) })).sort((a, b) => a.diff - b.diff);
-  const order = seededShuffle(scored.slice(0, 6), seed);
-  return order.slice(0, 3);
-}
 
 /* =========================================================================
    PROGRAM ENGINE
@@ -623,8 +552,8 @@ function getAudioCtx() {
   if (!_audioCtx) {
     try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; }
   }
-  // iOS can leave the context "suspended" or "interrupted" after camera/mic use (e.g. the
-  // barcode scanner). If resume() fails, ditch this context so the next call builds a fresh one.
+  // iOS can leave the context "suspended" or "interrupted" after certain interruptions
+  // (calls, other audio apps, etc). If resume() fails, ditch this context so the next call builds a fresh one.
   if (_audioCtx.state === "suspended" || _audioCtx.state === "interrupted") {
     const stale = _audioCtx;
     stale.resume().catch(() => {
@@ -1103,8 +1032,11 @@ function TimerTab({ engine, onLogResult, context, onClearContext }) {
   );
 
   const saveResult = () => {
-    const result = cfg.mode === "fortime" ? fmtTime(elapsed) : cfg.mode === "amrap" ? `${rounds} rounds in ${fmtTime(cfg.amrapMinutes * 60)}` : fmtTime(elapsed);
-    onLogResult({ mode: cfg.mode, label: label || TIMER_MODES.find((m) => m.id === cfg.mode)?.label, result, elapsedSeconds: elapsed, rounds: cfg.mode === "amrap" ? rounds : null, reps, date: new Date().toISOString() });
+    const parts = [fmtTime(elapsed)];
+    if (rounds > 0) parts.push(`${rounds} rounds`);
+    if (reps > 0) parts.push(`${reps} reps`);
+    const result = cfg.mode === "amrap" && rounds > 0 ? `${rounds} rounds in ${fmtTime(cfg.amrapMinutes * 60)}` : parts.join(" · ");
+    onLogResult({ mode: cfg.mode, label: label || TIMER_MODES.find((m) => m.id === cfg.mode)?.label, result, elapsedSeconds: elapsed, rounds, reps, date: new Date().toISOString() });
     setLabel("");
     reset();
   };
@@ -1221,18 +1153,18 @@ function TimerTab({ engine, onLogResult, context, onClearContext }) {
         </div>
         {finished && <div style={{ fontFamily: FONT_MONO, color: C.hazard, fontSize: 18, letterSpacing: 1, marginTop: 6 }}>FINISHED</div>}
 
-        {cfg.mode === "amrap" && (running || elapsed > 0) && (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginTop: 16 }}>
-            <button onClick={() => setRounds((r) => Math.max(0, r - 1))} style={{ width: 40, height: 40, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer" }}><Minus size={16} color={C.text} style={{ margin: "auto" }} /></button>
-            <div style={{ fontFamily: FONT_MONO, color: C.text, fontSize: 24 }}>{rounds} <span style={{ fontSize: 15, color: C.textFaint }}>ROUNDS</span></div>
-            <button onClick={() => setRounds((r) => r + 1)} style={{ width: 40, height: 40, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer" }}><Plus size={16} color={C.text} style={{ margin: "auto" }} /></button>
+        {(running || elapsed > 0) && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, marginTop: 20 }}>
+            <button onClick={() => setRounds((r) => Math.max(0, r - 1))} style={{ width: 48, height: 48, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Minus size={20} color={C.text} /></button>
+            <div style={{ fontFamily: FONT_MONO, color: C.text, fontSize: 26, minWidth: 80, textAlign: "center" }}>{rounds} <span style={{ fontSize: 15, color: C.textFaint }}>ROUNDS</span></div>
+            <button onClick={() => setRounds((r) => r + 1)} style={{ width: 48, height: 48, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Plus size={20} color={C.text} /></button>
           </div>
         )}
         {(running || elapsed > 0) && (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginTop: 14 }}>
-            <button onClick={() => setReps((r) => Math.max(0, r - 1))} style={{ width: 34, height: 34, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer" }}><Minus size={14} color={C.text} style={{ margin: "auto" }} /></button>
-            <div style={{ fontFamily: FONT_MONO, color: C.text, fontSize: 20 }}>{reps} <span style={{ fontSize: 14, color: C.textFaint }}>REPS</span></div>
-            <button onClick={() => setReps((r) => r + 1)} style={{ width: 34, height: 34, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer" }}><Plus size={14} color={C.text} style={{ margin: "auto" }} /></button>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, marginTop: 16 }}>
+            <button onClick={() => setReps((r) => Math.max(0, r - 1))} style={{ width: 48, height: 48, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Minus size={20} color={C.text} /></button>
+            <div style={{ fontFamily: FONT_MONO, color: C.text, fontSize: 26, minWidth: 80, textAlign: "center" }}>{reps} <span style={{ fontSize: 15, color: C.textFaint }}>REPS</span></div>
+            <button onClick={() => setReps((r) => r + 1)} style={{ width: 48, height: 48, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Plus size={20} color={C.text} /></button>
           </div>
         )}
       </div>
@@ -1616,8 +1548,7 @@ function ProgramSummary({ profile, logs, week, template }) {
   );
 }
 
-function ProgramTab({ profile, logs, equipment, template, saveEntry, saveDayMeta, week, setWeek, engine, onOpenTimer, onTimeWorkout }) {
-  const [activeDay, setActiveDay] = useState(null);
+function ProgramTab({ profile, logs, equipment, template, saveEntry, saveDayMeta, week, setWeek, engine, onOpenTimer, onTimeWorkout, activeDay, setActiveDay }) {
   const [quoteIdx] = useState(() => Math.floor(Math.random() * QUOTES.length));
   const [tipIdx] = useState(() => Math.floor(Math.random() * TIPS.length));
   const [showFinisherPicker, setShowFinisherPicker] = useState(false);
@@ -1794,465 +1725,10 @@ function ProgramTab({ profile, logs, equipment, template, saveEntry, saveDayMeta
   );
 }
 
-/* =========================================================================
-   TAB BAR
-   ======================================================================= */
-async function lookupBarcode(code) {
-  const resp = await fetch(`https://world.openfoodfacts.org/api/v2/product/${code}.json`, {
-    headers: { "User-Agent": "MyTrainer-ProteinTracker/1.0" },
-  });
-  if (!resp.ok) throw new Error("Lookup failed");
-  const data = await resp.json();
-  if (data.status !== 1 || !data.product) return null;
-  const p = data.product;
-  const protein100 = p.nutriments && (p.nutriments.proteins_100g ?? p.nutriments["proteins_100g"]);
-  // serving_size is usually free text like "30 g" or "1 scoop (32g)" — pull the first gram figure out of it.
-  let servingGrams = null;
-  const servingSource = p.serving_size || p.serving_quantity;
-  if (servingSource) {
-    const m = String(servingSource).match(/([\d.]+)\s*g\b/i);
-    if (m) servingGrams = parseFloat(m[1]);
-  }
-  return {
-    name: p.product_name || p.generic_name || `Product ${code}`,
-    p100: typeof protein100 === "number" ? protein100 : null,
-    servingGrams,
-  };
-}
-
-function BarcodeScannerModal({ onDetected, onClose }) {
-  const scannerRef = useRef(null);
-  const runningRef = useRef(false);
-  const containerId = "barcode-reader";
-  const [status, setStatus] = useState("Point your camera at the barcode…");
-
-  const safeStop = () => {
-    if (scannerRef.current && runningRef.current) {
-      runningRef.current = false;
-      try { scannerRef.current.stop().catch(() => {}); } catch (e) {}
-    }
-    // Camera use can leave the audio session in a bad state on iOS — force a rebuild.
-    if (_audioCtx) { try { _audioCtx.close(); } catch (e) {} _audioCtx = null; }
-    setTimeout(() => getAudioCtx(), 300);
-  };
-
-  useEffect(() => {
-    if (!window.Html5Qrcode) {
-      setStatus("Scanner library failed to load — check your connection and try again.");
-      return;
-    }
-    try {
-      const html5Qrcode = new window.Html5Qrcode(containerId, {
-        formatsToSupport: [
-          window.Html5QrcodeSupportedFormats.EAN_13,
-          window.Html5QrcodeSupportedFormats.EAN_8,
-          window.Html5QrcodeSupportedFormats.UPC_A,
-          window.Html5QrcodeSupportedFormats.UPC_E,
-        ],
-        verbose: false,
-      });
-      scannerRef.current = html5Qrcode;
-      html5Qrcode.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 260, height: 140 } },
-        (decodedText) => {
-          safeStop();
-          onDetected(decodedText);
-        },
-        () => {} // per-frame scan misses — ignore, keep scanning
-      ).then(() => {
-        runningRef.current = true;
-      }).catch(() => {
-        setStatus("Couldn't access the camera — check camera permissions for this site in your browser settings.");
-      });
-    } catch (err) {
-      setStatus("Scanner failed to start: " + (err && err.message ? err.message : "unknown error"));
-    }
-
-    return () => { safeStop(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "#000", zIndex: 60, display: "flex", flexDirection: "column" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "calc(env(safe-area-inset-top) + 14px) 16px 14px" }}>
-        <span style={{ fontFamily: FONT_DISPLAY, color: "#fff", fontSize: 18, textTransform: "uppercase" }}>Scan Barcode</span>
-        <button onClick={() => { safeStop(); onClose(); }} style={{ background: "none", border: "none", cursor: "pointer" }}><X size={22} color="#fff" /></button>
-      </div>
-      <div id={containerId} style={{ flex: 1 }} />
-      <div style={{ padding: 16, textAlign: "center", color: "#9CA3A6", fontFamily: FONT_BODY, fontSize: 14 }}>{status}</div>
-    </div>
-  );
-}
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1]);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
-
-async function callClaude(apiKey, { system, messages, maxTokens = 500 }) {
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
-    body: JSON.stringify({ model: "claude-sonnet-5", max_tokens: maxTokens, system, messages }),
-  });
-  if (!resp.ok) throw new Error("API responded with HTTP " + resp.status);
-  const data = await resp.json();
-  const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
-  return JSON.parse(text.replace(/```json|```/g, "").trim());
-}
-
-function ProteinRing({ consumed, target }) {
-  const pct = target ? Math.min(1, consumed / target) : 0;
-  const r = 52, cx = 70, cy = 70, circumference = 2 * Math.PI * r;
-  return (
-    <svg width="140" height="140" viewBox="0 0 140 140">
-      <circle cx={cx} cy={cy} r={r} stroke={C.lineFaint} strokeWidth="12" fill="none" />
-      <circle cx={cx} cy={cy} r={r} stroke={C.hazard} strokeWidth="12" fill="none"
-        strokeDasharray={`${circumference * pct} ${circumference}`} strokeLinecap="round"
-        transform={`rotate(-90 ${cx} ${cy})`} />
-      <text x={cx} y={cy - 4} textAnchor="middle" fill={C.text} fontSize="28" fontFamily="'Oswald', sans-serif">{consumed}</text>
-      <text x={cx} y={cy + 18} textAnchor="middle" fill={C.textFaint} fontSize="13" fontFamily="'JetBrains Mono', monospace">of {target || "?"}g</text>
-    </svg>
-  );
-}
-
-function NutritionTab({ profile, nutritionSettings, onSaveNutritionSettings, nutritionLogs, onAddFood, onRemoveFood, apiKey }) {
-  const [bwInput, setBwInput] = useState(nutritionSettings.bodyweightKg || profile?.bodyweight || "");
-  const [factor, setFactor] = useState(nutritionSettings.factor || 2.0);
-  const [foodName, setFoodName] = useState("");
-  const [foodDropdownOpen, setFoodDropdownOpen] = useState(false);
-  const [grams, setGrams] = useState("");
-  const [customP100, setCustomP100] = useState("");
-  const [servingSize, setServingSize] = useState(null); // grams per serving, when known
-  const [servingCount, setServingCount] = useState(1);
-  const [servingLabel, setServingLabel] = useState("serving");
-  const [weightUnit, setWeightUnit] = useState("g"); // "g" or "ml" — display label only, 1ml treated as 1g for protein math
-  const [addError, setAddError] = useState("");
-  const [showRecipeAsk, setShowRecipeAsk] = useState(false);
-  const [ingredientsInput, setIngredientsInput] = useState("");
-  const [aiRecipe, setAiRecipe] = useState(null);
-  const [aiBusy, setAiBusy] = useState(false);
-  const [aiError, setAiError] = useState("");
-  const [photoBusy, setPhotoBusy] = useState(false);
-  const [showScanner, setShowScanner] = useState(false);
-  const [scanBusy, setScanBusy] = useState(false);
-  const [scanError, setScanError] = useState("");
-  const fileInputRef = useRef(null);
-
-  useEffect(() => {
-    if (servingSize != null) setGrams(String(Math.round(servingSize * servingCount * 100) / 100));
-  }, [servingSize, servingCount]);
-
-  const handleBarcodeDetected = async (code) => {
-    setShowScanner(false);
-    setScanBusy(true);
-    setScanError("");
-    try {
-      const product = await lookupBarcode(code);
-      if (!product) {
-        setScanError(`No match found for barcode ${code} — try manual entry instead.`);
-      } else if (product.p100 == null) {
-        setFoodName(product.name);
-        setServingSize(null);
-        setScanError(`Found "${product.name}" but it has no protein data on file — enter protein per 100g manually.`);
-      } else {
-        setFoodName(product.name);
-        setCustomP100(String(product.p100));
-        setServingCount(1);
-        setServingLabel("serving");
-        setServingSize(product.servingGrams || null);
-        if (!product.servingGrams) setGrams(""); // no known serving size — fall back to manual grams
-      }
-    } catch (err) {
-      setScanError("Couldn't look that barcode up — check your connection and try again.");
-    } finally {
-      setScanBusy(false);
-    }
-  };
-
-  const day = todayKey();
-  const todayLog = nutritionLogs[day] || [];
-  const consumed = Math.round(todayLog.reduce((s, e) => s + e.protein, 0) * 10) / 10;
-  const target = computeProteinTarget(nutritionSettings.bodyweightKg, nutritionSettings.factor);
-  const remaining = target ? Math.max(0, target - consumed) : null;
-
-  const matched = matchFood(foodName);
-  const previewProtein = matched
-    ? (matched.p100 / 100) * (parseFloat(grams) || 0)
-    : customP100 ? (parseFloat(customP100) / 100) * (parseFloat(grams) || 0) : null;
-
-  const handleAdd = () => {
-    setAddError("");
-    const g = parseFloat(grams);
-    if (!foodName) { setAddError("Enter a food name first."); return; }
-    if (!g) { setAddError(`Enter a weight in ${weightUnit} (or count servings instead).`); return; }
-    const p100 = matched ? matched.p100 : parseFloat(customP100);
-    if (!p100) { setAddError(`Enter protein per 100${weightUnit} for this food.`); return; }
-    const servingNote = servingSize != null ? `${servingCount} ${servingLabel}${servingCount === 1 ? "" : "s"}` : null;
-    onAddFood({ id: Date.now() + Math.random(), name: foodName, grams: g, unit: weightUnit, servingNote, protein: Math.round((p100 / 100) * g * 10) / 10, time: new Date().toISOString(), source: "manual" });
-    setFoodName(""); setGrams(""); setCustomP100(""); setServingSize(null); setServingCount(1); setServingLabel("serving"); setWeightUnit("g");
-  };
-
-  const quickLogRecipe = (r) => {
-    onAddFood({ id: Date.now() + Math.random(), name: r.name, grams: null, protein: r.protein, time: new Date().toISOString(), source: "quick" });
-  };
-
-  const seed = parseInt(day.replace(/-/g, ""), 10) % 100000;
-  const recipes = target ? suggestedRecipes(remaining, seed) : [];
-
-  const handlePhotoChange = async (e) => {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    if (!apiKey) { setAiError("Add an Anthropic API key in Settings to use photo scanning."); e.target.value = ""; return; }
-    setPhotoBusy(true); setAiError("");
-    try {
-      const base64 = await fileToBase64(file);
-      const parsed = await callClaude(apiKey, {
-        maxTokens: 300,
-        system: 'You estimate protein content from a photo of a meal. Respond ONLY with JSON: {"name": string, "estimated_grams": number, "protein_g": number}. No other text, no markdown fences.',
-        messages: [{ role: "user", content: [
-          { type: "image", source: { type: "base64", media_type: file.type || "image/jpeg", data: base64 } },
-          { type: "text", text: "Estimate the protein content of this meal." },
-        ] }],
-      });
-      onAddFood({ id: Date.now() + Math.random(), name: parsed.name || "Photo meal", grams: parsed.estimated_grams || null, protein: parsed.protein_g || 0, time: new Date().toISOString(), source: "photo" });
-    } catch (err) {
-      setAiError("Couldn't estimate that photo — try manual entry, or double-check your API key in Settings.");
-    } finally {
-      setPhotoBusy(false);
-      e.target.value = "";
-    }
-  };
-
-  const askForRecipe = async () => {
-    if (!apiKey) { setAiError("Add an Anthropic API key in Settings to generate custom recipes."); return; }
-    if (!ingredientsInput.trim()) return;
-    setAiBusy(true); setAiError(""); setAiRecipe(null);
-    try {
-      const parsed = await callClaude(apiKey, {
-        maxTokens: 400,
-        system: 'You are a practical home cook. Given a short list of ingredients someone has at home and how much protein they still need today, suggest ONE simple, quick, high-protein recipe using mainly those ingredients plus basic pantry staples (salt, oil, spices). Respond ONLY with JSON: {"name": string, "protein_g": number, "steps": string}. No other text, no markdown fences.',
-        messages: [{ role: "user", content: `I have: ${ingredientsInput}. I need about ${remaining || 30}g more protein today. Give me one recipe.` }],
-      });
-      setAiRecipe(parsed);
-    } catch (err) {
-      setAiError("Couldn't reach the AI just now — check your API key in Settings, or try again.");
-    } finally {
-      setAiBusy(false);
-    }
-  };
-
-  return (
-    <div style={{ maxWidth: 560, margin: "0 auto", padding: "calc(env(safe-area-inset-top) + 36px) 16px 100px" }}>
-      <div style={{ fontFamily: FONT_MONO, color: C.hazard, fontSize: 14, letterSpacing: 2, marginBottom: 4 }}>PROTEIN</div>
-      <h1 style={{ fontFamily: FONT_DISPLAY, fontSize: 31, color: C.text, margin: "0 0 16px", textTransform: "uppercase" }}>Fuel the build</h1>
-
-      {!target ? (
-        <div style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
-          <div style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.textDim, marginBottom: 14, lineHeight: 1.5 }}>
-            Set your bodyweight and a target so the app can calculate how much protein you need each day for lean muscle.
-          </div>
-          <label style={{ fontFamily: FONT_BODY, fontSize: 14, color: C.text, fontWeight: 600, display: "block", marginBottom: 4 }}>Bodyweight (kg)</label>
-          <input type="number" value={bwInput} onChange={(e) => setBwInput(e.target.value)}
-            style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_MONO, fontSize: 18, boxSizing: "border-box", outline: "none", marginBottom: 14 }} />
-          <label style={{ fontFamily: FONT_BODY, fontSize: 14, color: C.text, fontWeight: 600, display: "block", marginBottom: 8 }}>Target (g protein per kg bodyweight)</label>
-          <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-            {[1.6, 1.8, 2.0, 2.2].map((f) => (
-              <button key={f} onClick={() => setFactor(f)} style={{
-                padding: "8px 14px", borderRadius: 6, border: `1px solid ${factor === f ? C.hazard : C.line}`,
-                background: factor === f ? C.hazardDim : C.bgRaised, color: factor === f ? C.hazard : C.textDim,
-                fontFamily: FONT_MONO, fontSize: 15, cursor: "pointer",
-              }}>{f}g/kg</button>
-            ))}
-          </div>
-          <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textFaint, marginBottom: 16, lineHeight: 1.4 }}>
-            2.0g/kg is a solid default for building/maintaining lean muscle while training hard. Higher end (2.2) if you're also cutting fat.
-          </div>
-          <button onClick={() => onSaveNutritionSettings({ bodyweightKg: parseFloat(bwInput) || null, factor })} style={{ width: "100%", background: C.hazard, border: "none", borderRadius: 8, padding: "12px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
-            Set Target
-          </button>
-        </div>
-      ) : (
-        <>
-          <div style={{ background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 10, padding: 16, marginBottom: 16, display: "flex", alignItems: "center", gap: 16 }}>
-            <ProteinRing consumed={consumed} target={target} />
-            <div>
-              <div style={{ fontFamily: FONT_DISPLAY, fontSize: 24, color: C.hazard }}>{remaining}g left</div>
-              <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim, marginTop: 2 }}>{consumed}g logged of {target}g today</div>
-              <button onClick={() => onSaveNutritionSettings(null)} style={{ marginTop: 8, background: "none", border: "none", color: C.textFaint, fontFamily: FONT_MONO, fontSize: 12, cursor: "pointer", padding: 0 }}>Change target</button>
-            </div>
-          </div>
-
-          {remaining > 0 && recipes.length > 0 && (
-            <div style={{ marginBottom: 20 }}>
-              <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, letterSpacing: 1, marginBottom: 10 }}>
-                YOU'VE GOT {remaining}G LEFT — QUICK OPTIONS
-              </div>
-              {recipes.map((r, i) => (
-                <div key={i} style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: 14, marginBottom: 8 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 16 }}>{r.name}</div>
-                    <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.good, flexShrink: 0, marginLeft: 8 }}>~{r.protein}g</span>
-                  </div>
-                  <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: C.textDim, marginTop: 4, lineHeight: 1.4 }}>{r.steps}</div>
-                  <button onClick={() => quickLogRecipe(r)} style={{ marginTop: 8, background: "none", border: `1px solid ${C.hazard}`, borderRadius: 6, padding: "6px 12px", color: C.hazard, fontFamily: FONT_MONO, fontSize: 12, cursor: "pointer" }}>Log this</button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, letterSpacing: 1, marginBottom: 10 }}>ADD FOOD</div>
-          <div style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: 14, marginBottom: 20 }}>
-            <button onClick={() => setShowScanner(true)} disabled={scanBusy} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px", color: C.text, fontFamily: FONT_MONO, fontSize: 13, cursor: "pointer", marginBottom: 10 }}>
-              <Barcode size={15} /> {scanBusy ? "Looking up…" : "Scan Barcode"}
-            </button>
-            {scanError && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.hazard, marginBottom: 10, lineHeight: 1.4 }}>{scanError}</div>}
-            <div style={{ position: "relative", marginBottom: 8 }}>
-              <input value={foodName} onChange={(e) => { setFoodName(e.target.value); setFoodDropdownOpen(true); }}
-                onFocus={() => setFoodDropdownOpen(true)}
-                onBlur={() => setTimeout(() => setFoodDropdownOpen(false), 150)}
-                placeholder="e.g. Chicken breast — search or type your own"
-                style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_BODY, fontSize: 15, boxSizing: "border-box", outline: "none" }} />
-              {foodDropdownOpen && foodName && (() => {
-                const q = foodName.toLowerCase();
-                const results = FOOD_DB.filter((f) => f.name.toLowerCase().includes(q)).slice(0, 8);
-                return (
-                  <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, marginTop: 4, maxHeight: 200, overflowY: "auto", zIndex: 5, boxShadow: "0 6px 16px rgba(0,0,0,0.4)" }}>
-                    {results.length > 0 ? results.map((f) => (
-                      <button key={f.name} onClick={() => {
-                        setFoodName(f.name); setFoodDropdownOpen(false);
-                        setWeightUnit(f.unit || "g");
-                        if (f.servingGrams) {
-                          setServingSize(f.servingGrams);
-                          setServingLabel(f.servingLabel || "serving");
-                          setServingCount(1);
-                        } else {
-                          setServingSize(null);
-                        }
-                      }}
-                        style={{ width: "100%", textAlign: "left", background: "none", border: "none", padding: "10px 12px", color: C.text, fontFamily: FONT_BODY, fontSize: 14, cursor: "pointer", borderBottom: `1px solid ${C.lineFaint}` }}>
-                        {f.name} <span style={{ color: C.textFaint, fontFamily: FONT_MONO, fontSize: 12 }}>· {f.p100}g/100g</span>
-                      </button>
-                    )) : (
-                      <div style={{ padding: "10px 12px", color: C.textFaint, fontFamily: FONT_BODY, fontSize: 12.5 }}>Not in our list — enter protein per 100g below and we'll calculate the rest.</div>
-                    )}
-                  </div>
-                );
-              })()}
-            </div>
-            {servingSize != null ? (
-              <div style={{ background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: 12, marginBottom: 8 }}>
-                <div style={{ fontFamily: FONT_MONO, fontSize: 11, color: C.textFaint, letterSpacing: 0.5, marginBottom: 8 }}>HOW MANY {servingLabel.toUpperCase()}{servingCount === 1 ? "" : "S"}?</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <button onClick={() => setServingCount((c) => Math.max(1, c - 1))} style={{ width: 34, height: 34, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Minus size={15} color={C.text} /></button>
-                  <span style={{ fontFamily: FONT_DISPLAY, fontSize: 22, color: C.text, minWidth: 24, textAlign: "center" }}>{servingCount}</span>
-                  <button onClick={() => setServingCount((c) => c + 1)} style={{ width: 34, height: 34, borderRadius: "50%", border: `1px solid ${C.line}`, background: C.bgCard, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Plus size={15} color={C.text} /></button>
-                  <span style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim }}>{servingLabel}{servingCount === 1 ? "" : "s"} = {grams}{weightUnit}</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 8 }}>
-                  <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textFaint }}>1 {servingLabel} =</span>
-                  <input type="number" value={servingSize} onChange={(e) => setServingSize(parseFloat(e.target.value) || 0)}
-                    style={{ width: 56, minWidth: 0, background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 5, padding: "5px 6px", color: C.text, fontFamily: FONT_MONO, fontSize: 13, boxSizing: "border-box", outline: "none" }} />
-                  <span style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textFaint }}>{weightUnit}</span>
-                  <button onClick={() => setServingSize(null)} style={{ marginLeft: "auto", background: "none", border: "none", color: C.signal, fontFamily: FONT_MONO, fontSize: 11, cursor: "pointer", padding: 0 }}>Switch to weight</button>
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-                <input type="number" value={grams} onChange={(e) => setGrams(e.target.value)} placeholder={weightUnit === "ml" ? "millilitres" : "grams"}
-                  style={{ flex: 1, minWidth: 0, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_MONO, fontSize: 15, boxSizing: "border-box", outline: "none" }} />
-                <div style={{ display: "flex", border: `1px solid ${C.line}`, borderRadius: 6, overflow: "hidden", flexShrink: 0 }}>
-                  {["g", "ml"].map((u) => (
-                    <button key={u} onClick={() => setWeightUnit(u)} style={{ padding: "0 14px", background: weightUnit === u ? C.hazardDim : C.bgRaised, color: weightUnit === u ? C.hazard : C.textDim, border: "none", fontFamily: FONT_MONO, fontSize: 14, cursor: "pointer" }}>{u}</button>
-                  ))}
-                </div>
-                {!matched && foodName && (
-                  <input type="number" value={customP100} onChange={(e) => setCustomP100(e.target.value)} placeholder={`protein/100${weightUnit}`}
-                    style={{ flex: 1, minWidth: 0, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_MONO, fontSize: 15, boxSizing: "border-box", outline: "none" }} />
-                )}
-              </div>
-            )}
-            {!matched && foodName && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.textFaint, marginBottom: 8 }}>Not in our list — enter protein per 100{weightUnit} and we'll calculate the rest. Scanning a barcode fills this in automatically.</div>}
-            {servingSize == null && foodName && (
-              <button onClick={() => { setServingSize(parseFloat(grams) || 30); setServingLabel("serving"); setServingCount(1); }} style={{ background: "none", border: "none", color: C.signal, fontFamily: FONT_MONO, fontSize: 12, cursor: "pointer", padding: 0, marginBottom: 8, display: "block" }}>
-                + Count servings instead ({weightUnit === "ml" ? "e.g. glasses, cups" : "e.g. eggs, scoops"})
-              </button>
-            )}
-            {previewProtein != null && <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.good, marginBottom: 8 }}>≈ {Math.round(previewProtein * 10) / 10}g protein</div>}
-            {addError && <div style={{ fontFamily: FONT_BODY, fontSize: 12, color: C.hazard, marginBottom: 8 }}>{addError}</div>}
-            <button onClick={handleAdd} style={{ width: "100%", background: C.hazard, border: "none", borderRadius: 6, padding: "10px", color: "#1A1A1A", fontFamily: FONT_DISPLAY, fontSize: 15, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>Add to Log</button>
-
-            <input type="file" accept="image/*" capture="environment" ref={fileInputRef} style={{ display: "none" }} onChange={handlePhotoChange} />
-            <button onClick={() => fileInputRef.current.click()} disabled={photoBusy} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: "none", border: `1px solid ${C.signal}`, borderRadius: 6, padding: "10px", color: C.signal, fontFamily: FONT_MONO, fontSize: 13, cursor: "pointer", marginTop: 8 }}>
-              <Camera size={15} /> {photoBusy ? "Estimating…" : "Scan a Meal Photo (AI)"}
-            </button>
-          </div>
-
-          {showScanner && <BarcodeScannerModal onDetected={handleBarcodeDetected} onClose={() => setShowScanner(false)} />}
-
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-            <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, letterSpacing: 1 }}>ASK FOR A CUSTOM RECIPE</div>
-            <button onClick={() => setShowRecipeAsk((s) => !s)} style={{ background: "none", border: "none", color: C.signal, fontFamily: FONT_MONO, fontSize: 12, cursor: "pointer" }}>{showRecipeAsk ? "Hide" : "Open"}</button>
-          </div>
-          {showRecipeAsk && (
-            <div style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: 14, marginBottom: 20 }}>
-              <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.textDim, marginBottom: 8, lineHeight: 1.4 }}>List a few ingredients you've got, and the AI will build one quick recipe around them.</div>
-              <input value={ingredientsInput} onChange={(e) => setIngredientsInput(e.target.value)} placeholder="e.g. eggs, spinach, feta"
-                style={{ width: "100%", background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_BODY, fontSize: 15, boxSizing: "border-box", outline: "none", marginBottom: 8 }} />
-              <button onClick={askForRecipe} disabled={aiBusy} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: C.signalDim, border: `1px solid ${C.signal}`, borderRadius: 6, padding: "10px", color: C.signal, fontFamily: FONT_DISPLAY, fontSize: 14, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
-                <Sparkles size={14} /> {aiBusy ? "Thinking…" : aiRecipe ? "Give Me Another" : "Get Recipe"}
-              </button>
-              {aiRecipe && (
-                <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${C.lineFaint}` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 16 }}>{aiRecipe.name}</div>
-                    <span style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.good }}>~{aiRecipe.protein_g}g</span>
-                  </div>
-                  <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: C.textDim, marginTop: 4, lineHeight: 1.4 }}>{aiRecipe.steps}</div>
-                  <button onClick={() => quickLogRecipe({ name: aiRecipe.name, protein: aiRecipe.protein_g })} style={{ marginTop: 8, background: "none", border: `1px solid ${C.hazard}`, borderRadius: 6, padding: "6px 12px", color: C.hazard, fontFamily: FONT_MONO, fontSize: 12, cursor: "pointer" }}>Log this</button>
-                </div>
-              )}
-            </div>
-          )}
-          {aiError && <div style={{ fontFamily: FONT_BODY, fontSize: 13, color: C.hazard, marginBottom: 16 }}>{aiError}</div>}
-
-          <div style={{ fontFamily: FONT_MONO, fontSize: 13, color: C.textFaint, letterSpacing: 1, marginBottom: 10 }}>TODAY'S LOG</div>
-          {todayLog.length === 0 && <div style={{ fontFamily: FONT_BODY, color: C.textFaint, fontSize: 15 }}>Nothing logged yet today.</div>}
-          {[...todayLog].reverse().map((entry) => (
-            <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: 12, marginBottom: 8 }}>
-              <div>
-                <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 14 }}>{entry.name}</div>
-                <div style={{ fontFamily: FONT_MONO, fontSize: 12, color: C.textFaint, marginTop: 2 }}>
-                  {entry.servingNote ? `${entry.servingNote} (${entry.grams}${entry.unit || "g"}) · ` : entry.grams ? `${entry.grams}${entry.unit || "g"} · ` : ""}{new Date(entry.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </div>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontFamily: FONT_MONO, fontSize: 15, color: C.hazard, fontWeight: 700 }}>{entry.protein}g</span>
-                <button onClick={() => onRemoveFood(day, entry.id)} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}><Trash2 size={14} color={C.textFaint} /></button>
-              </div>
-            </div>
-          ))}
-        </>
-      )}
-    </div>
-  );
-}
-
 function TabBar({ tab, setTab, timerActive }) {
   const tabs = [
     { id: "program", label: "Program", icon: CalendarDays },
     { id: "timer", label: "Timer", icon: TimerIcon },
-    { id: "protein", label: "Protein", icon: Utensils },
     { id: "log", label: "Log", icon: ClipboardList },
   ];
   return (
@@ -2312,11 +1788,10 @@ function useWakeLock() {
 
 const DEFAULT_EQUIPMENT = { adjustableBench: false, rower: false, wallball: false };
 
-function SettingsModal({ equipment, onSaveEquipment, template, onSaveTemplate, profile, onSaveOneRMs, apiKey, onSaveApiKey, raceDate, programWeeks, currentWeek, onSetRaceDay, onExportData, onImportData, onReset, onClose }) {
+function SettingsModal({ equipment, onSaveEquipment, template, onSaveTemplate, profile, onSaveOneRMs, raceDate, programWeeks, currentWeek, onSetRaceDay, onExportData, onImportData, onReset, onClose }) {
   const [local, setLocal] = useState(equipment);
   const [localTemplate, setLocalTemplate] = useState(template);
   const [oneRMs, setOneRMs] = useState({ squat: profile.squat, swissBench: profile.swissBench, trapDeadlift: profile.trapDeadlift, ohp: profile.ohp });
-  const [localApiKey, setLocalApiKey] = useState(apiKey || "");
   const [localRaceDate, setLocalRaceDate] = useState(raceDate || "");
   const fileInputRef = useRef(null);
   const toggle = (key) => setLocal((l) => ({ ...l, [key]: !l[key] }));
@@ -2361,16 +1836,6 @@ function SettingsModal({ equipment, onSaveEquipment, template, onSaveTemplate, p
         <input type="file" accept="application/json" ref={fileInputRef} style={{ display: "none" }} onChange={handleFileChange} />
         <button onClick={() => fileInputRef.current.click()} style={{ width: "100%", background: "none", border: `1px solid ${C.line}`, borderRadius: 8, padding: "12px", color: C.textDim, fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
           Import Backup
-        </button>
-
-        <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.textFaint, letterSpacing: 1, margin: "26px 0 10px" }}>AI FEATURES</div>
-        <div style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.textDim, marginBottom: 12, lineHeight: 1.5 }}>
-          Add your own Anthropic API key to unlock meal photo scanning and custom recipe generation on the Protein tab. It's stored only in this browser and sent directly to Anthropic — never through any server of mine. Get one at <span style={{ color: C.signal }}>console.anthropic.com</span>.
-        </div>
-        <input type="password" value={localApiKey} onChange={(e) => setLocalApiKey(e.target.value)} placeholder="sk-ant-..."
-          style={{ width: "100%", background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 6, padding: "10px 12px", color: C.text, fontFamily: FONT_MONO, fontSize: 15, boxSizing: "border-box", outline: "none", marginBottom: 8 }} />
-        <button onClick={() => onSaveApiKey(localApiKey)} style={{ width: "100%", background: "none", border: `1px solid ${C.signal}`, borderRadius: 8, padding: "12px", color: C.signal, fontFamily: FONT_DISPLAY, fontSize: 17, letterSpacing: 1, textTransform: "uppercase", cursor: "pointer" }}>
-          Save API Key
         </button>
 
         <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.textFaint, letterSpacing: 1, margin: "18px 0 10px" }}>UPDATE 1RMS</div>
@@ -2462,11 +1927,9 @@ function App() {
   const [template, setTemplate] = useState("default");
   const [week, setWeek] = useState(1);
   const [tab, setTab] = useState("program");
+  const [activeDay, setActiveDay] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [timerContext, setTimerContext] = useState(null);
-  const [nutritionSettings, setNutritionSettings] = useState({ bodyweightKg: null, factor: 2.0 });
-  const [nutritionLogs, setNutritionLogs] = useState({});
-  const [apiKey, setApiKey] = useState("");
   const [raceDate, setRaceDate] = useState(null);
   const [programWeeksState, setProgramWeeksState] = useState(BASE_PROGRAM_WEEKS);
   const engine = useTimerEngine();
@@ -2480,14 +1943,10 @@ function App() {
       const eq = await loadKey("equipment", DEFAULT_EQUIPMENT);
       const tmpl = await loadKey("template", "default");
       const wk = await loadKey("currentWeek", 1);
-      const ns = await loadKey("nutritionSettings", { bodyweightKg: null, factor: 2.0 });
-      const nl = await loadKey("nutritionLogs", {});
-      const key = await loadKey("apiKey", "");
       const rd = await loadKey("raceDate", null);
       const pw = await loadKey("programWeeks", BASE_PROGRAM_WEEKS);
       setProgramLength(pw || BASE_PROGRAM_WEEKS); // must happen before any component reads PHASES
       setProfile(p); setLogs(l || {}); setTimerLogs(tl || []); setEquipment({ ...DEFAULT_EQUIPMENT, ...(eq || {}) }); setTemplate(tmpl || "default"); setWeek(wk || 1);
-      setNutritionSettings(ns || { bodyweightKg: null, factor: 2.0 }); setNutritionLogs(nl || {}); setApiKey(key || "");
       setRaceDate(rd || null); setProgramWeeksState(pw || BASE_PROGRAM_WEEKS);
     })();
   }, []);
@@ -2539,7 +1998,7 @@ function App() {
   };
 
   const handleExportData = () => {
-    const data = { profile, logs, timerLogs, equipment, template, currentWeek: week, nutritionSettings, nutritionLogs, raceDate, programWeeks: programWeeksState, exportedAt: new Date().toISOString(), appVersion: "my-trainer-v1" };
+    const data = { profile, logs, timerLogs, equipment, template, currentWeek: week, raceDate, programWeeks: programWeeksState, exportedAt: new Date().toISOString(), appVersion: "my-trainer-v1" };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -2560,37 +2019,10 @@ function App() {
     if (data.equipment) { const eq = { ...DEFAULT_EQUIPMENT, ...data.equipment }; setEquipment(eq); await saveKey("equipment", eq); }
     if (data.template) { setTemplate(data.template); await saveKey("template", data.template); }
     if (data.currentWeek) { setWeek(data.currentWeek); await saveKey("currentWeek", data.currentWeek); }
-    if (data.nutritionSettings) { setNutritionSettings(data.nutritionSettings); await saveKey("nutritionSettings", data.nutritionSettings); }
-    if (data.nutritionLogs) { setNutritionLogs(data.nutritionLogs); await saveKey("nutritionLogs", data.nutritionLogs); }
     if (data.programWeeks) { setProgramLength(data.programWeeks); setProgramWeeksState(data.programWeeks); await saveKey("programWeeks", data.programWeeks); }
     if (data.raceDate) { setRaceDate(data.raceDate); await saveKey("raceDate", data.raceDate); }
     setShowSettings(false);
     window.alert("Backup restored.");
-  };
-
-  const handleSaveNutritionSettings = async (settings) => {
-    const next = settings || { bodyweightKg: null, factor: 2.0 };
-    setNutritionSettings(next);
-    await saveKey("nutritionSettings", next);
-  };
-  const handleAddFood = useCallback((entry) => {
-    setNutritionLogs((prev) => {
-      const day = todayKey();
-      const next = { ...prev, [day]: [...(prev[day] || []), entry] };
-      saveKey("nutritionLogs", next);
-      return next;
-    });
-  }, []);
-  const handleRemoveFood = useCallback((day, id) => {
-    setNutritionLogs((prev) => {
-      const next = { ...prev, [day]: (prev[day] || []).filter((e) => e.id !== id) };
-      saveKey("nutritionLogs", next);
-      return next;
-    });
-  }, []);
-  const handleSaveApiKey = async (key) => {
-    setApiKey(key);
-    await saveKey("apiKey", key);
   };
 
   const saveEntry = useCallback((exId, entry) => {
@@ -2651,16 +2083,15 @@ function App() {
       ) : (
         <>
           {tab === "program" && (
-            <ProgramTab profile={profile} logs={logs} equipment={equipment} template={template} saveEntry={saveEntry} saveDayMeta={saveDayMeta} week={week} setWeek={updateWeek} engine={engine} onOpenTimer={() => setTab("timer")} onTimeWorkout={onTimeWorkout} />
+            <ProgramTab profile={profile} logs={logs} equipment={equipment} template={template} saveEntry={saveEntry} saveDayMeta={saveDayMeta} week={week} setWeek={updateWeek} engine={engine} onOpenTimer={() => setTab("timer")} onTimeWorkout={onTimeWorkout} activeDay={activeDay} setActiveDay={setActiveDay} />
           )}
           {tab === "timer" && <TimerTab engine={engine} onLogResult={onLogTimerResult} context={timerContext} onClearContext={() => setTimerContext(null)} />}
-          {tab === "protein" && <NutritionTab profile={profile} nutritionSettings={nutritionSettings} onSaveNutritionSettings={handleSaveNutritionSettings} nutritionLogs={nutritionLogs} onAddFood={handleAddFood} onRemoveFood={handleRemoveFood} apiKey={apiKey} />}
           {tab === "log" && <LogTab logs={logs} timerLogs={timerLogs} />}
           <TabBar tab={tab} setTab={setTab} timerActive={engine.running} />
           <button onClick={() => setShowSettings(true)} title="Settings" style={{ position: "fixed", top: "calc(env(safe-area-inset-top) + 14px)", right: 14, background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 8, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", zIndex: 25 }}>
             <Settings size={16} color={C.textFaint} />
           </button>
-          {showSettings && <SettingsModal equipment={equipment} onSaveEquipment={handleSaveEquipment} template={template} onSaveTemplate={handleSaveTemplate} profile={profile} onSaveOneRMs={handleSaveOneRMs} apiKey={apiKey} onSaveApiKey={handleSaveApiKey} raceDate={raceDate} programWeeks={programWeeksState} currentWeek={week} onSetRaceDay={handleSetRaceDay} onExportData={handleExportData} onImportData={handleImportData} onReset={handleReset} onClose={() => setShowSettings(false)} />}
+          {showSettings && <SettingsModal equipment={equipment} onSaveEquipment={handleSaveEquipment} template={template} onSaveTemplate={handleSaveTemplate} profile={profile} onSaveOneRMs={handleSaveOneRMs} raceDate={raceDate} programWeeks={programWeeksState} currentWeek={week} onSetRaceDay={handleSetRaceDay} onExportData={handleExportData} onImportData={handleImportData} onReset={handleReset} onClose={() => setShowSettings(false)} />}
         </>
       )}
     </div>
