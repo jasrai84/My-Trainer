@@ -97,7 +97,7 @@ const QUOTES = [
   "Pace is a decision, not a feeling. Make it early.",
   "Strong enough to lift it. Built to carry it further.",
   "Nobody rises to race day. You sink to the floor you built in training.",
-  "The sled doesn't care about your excuses. Push.",
+  "The carry doesn't care about your excuses. Grip it and go.",
   "Fat loss is a side effect of showing up angry at the bar.",
   "Six months from now you'll wish you started today. So start today.",
   "Hyrox isn't won at the finish line. It's won in week three, on the days you didn't want to go.",
@@ -107,12 +107,12 @@ const QUOTES = [
   "Discipline is choosing between what you want now and what you want most.",
   "The engine is built in silence — zone 2, ski erg, nobody watching.",
   "Log the number. Beat the number. Repeat, week after week.",
-  "Slow is smooth on the sled push. Smooth is fast everywhere else.",
+  "Slow is smooth on the heavy carry. Smooth is fast everywhere else.",
 ];
 const TIPS = [
   "Shoulder flaring up? Drop the Swiss bar angle slightly and keep elbows tucked closer than a straight bar press.",
   "Trap bar deadlifts let you stay more upright — brace hard and drive through the whole foot, not just the heel.",
-  "On sled work, shorter/faster steps beat long strides for keeping constant force on the sled.",
+  "On heavy carries, shorter/faster steps beat long strides for keeping constant tension through the grip.",
   "Ski erg power comes from the hip hinge, not the arms. Snap the hips, let the arms follow.",
   "Carry work: grip fails before legs. Train grip endurance, not just max hold.",
   "45-minute weekday sessions: cut rest on accessories to 60-75s so conditioning doesn't get squeezed.",
@@ -204,6 +204,16 @@ function mainLiftWeight(profile, logs, liftKey, week) {
   if (!oneRm) return null;
   return roundBar(oneRm * weekIntensity(week) * adaptiveFactor(logs, liftKey));
 }
+// Overhead press runs its own flat +2.5kg/week progression instead of the shared %1RM phase
+// curve — the phase curve was landing too light for OHP specifically. Starts at 60% of 1RM
+// and climbs 2.5kg every week, capped just under 1RM for safety; deload weeks still back off.
+function ohpWeight(profile, week) {
+  const oneRm = profile.ohp;
+  if (!oneRm) return null;
+  const base = roundBar(oneRm * 0.6);
+  const raw = Math.min(base + (week - 1) * 2.5, oneRm * 0.95);
+  return roundBar(isDeload(week) ? raw * 0.85 : raw);
+}
 function getLastEntry(logs, exId, beforeWeek) {
   const matches = allEntries(logs).filter((e) => e.exId === exId && e.week < beforeWeek && e.weight != null);
   if (matches.length === 0) return null;
@@ -236,46 +246,122 @@ function seededShuffle(arr, seed) {
   return a;
 }
 
-// Auto-rotated pool sticks to indoor/limited-space moves (garage gym default).
-// Sled is left out of the automatic rotation — it needs open space — but stays
-// available as a manual pick via "Select New Workout" for days with room to set up outdoors.
-// Rower/wall ball only join the pool once that equipment is switched on in Settings.
-const BASE_AUTO_FINISHER_KEYS = ["ski", "rope", "kbSwing", "treadmill", "burpee"];
-function getAutoFinisherKeys(equipment) {
-  const extra = [];
-  if (equipment?.rower) extra.push("row");
-  if (equipment?.wallball) extra.push("wallball");
-  return [...BASE_AUTO_FINISHER_KEYS, ...extra];
+// Weekday conditioning finishers: mixed AMRAP / For Time mini-workouts (no single-move
+// repeats). All built from equipment already in the garage — no sled push here (no handles
+// to push it with; sled pull is still fine and lives on Saturday's Hyrox sim), no jumping
+// movements (reverse lunges instead), pull-ups always kept to a short 3-5 rep range so
+// grip/arms don't burn out early in a finisher.
+// Engine station auto-swaps to the rower once that's switched on in Settings; the
+// leg-power station auto-swaps to wall balls once that's switched on too.
+function engineStation(equipment) { return equipment?.rower ? "Row" : "Ski Erg"; }
+function legPowerStation(equipment, dbW) {
+  return equipment?.wallball ? { name: "Wall balls", detail: "12 reps" } : { name: `DB thrusters (${dbW}kg pair)`, detail: "10 reps" };
 }
-function getAllFinisherKeys(equipment) {
-  return [...getAutoFinisherKeys(equipment), "sled"];
-}
-const FINISHER_META = {
-  ski: { label: "Ski Erg intervals", space: "Minimal space — indoor friendly" },
-  rope: { label: "Battle rope waves", space: "Minimal space — indoor friendly" },
-  kbSwing: { label: "Kettlebell swings", space: "Minimal space — indoor friendly" },
-  treadmill: { label: "Treadmill sprints", space: "Minimal space — indoor friendly" },
-  burpee: { label: "Burpee broad jumps", space: "Small clear floor area" },
-  sled: { label: "Sled push (Bulldog Saxon)", space: "Needs open space — garden/outdoors" },
-  row: { label: "Rowing intervals", space: "Minimal space — indoor friendly" },
-  wallball: { label: "Wall balls", space: "Needs ceiling height — indoor or garage" },
-};
-function condShort(week, style) {
+const MIXED_FINISHERS = [
+  {
+    key: "engineLadder", title: "Engine Ladder", format: "AMRAP", capMin: (bump) => 12 + bump,
+    blocks: (equipment, kbW) => [
+      { name: `${engineStation(equipment)} — 200m`, detail: "Steady pace, hold it every round" },
+      { name: `Kettlebell swings (${kbW}kg)`, detail: "12 reps" },
+      { name: "Pull-ups", detail: "3-5 reps" },
+      { name: "Reverse lunges", detail: "10 reps (5/leg), controlled — no jumping" },
+    ],
+  },
+  {
+    key: "gripGrind", title: "Grip & Grind", format: "AMRAP", capMin: (bump) => 12 + bump,
+    blocks: (equipment, kbW) => [
+      { name: "Farmer's carry (trap bar or heavy DBs)", detail: "40m" },
+      { name: "Burpees", detail: "8 reps" },
+      { name: "Pull-ups", detail: "3-5 reps" },
+      { name: `KB goblet squat (${kbW}kg)`, detail: "10 reps" },
+    ],
+  },
+  {
+    key: "fullBodyCycle", title: "Full Body Cycle", format: "AMRAP", capMin: (bump) => 14 + bump,
+    blocks: (equipment, kbW, dbW) => [
+      { name: "Battle rope waves", detail: "30s max effort" },
+      { name: "Reverse lunges", detail: "10 reps (5/leg), controlled — no jumping" },
+      { name: `${engineStation(equipment)} — 200m`, detail: "Push the pace" },
+      legPowerStation(equipment, dbW),
+    ],
+  },
+  {
+    key: "sprintChipper", title: "Sprint Chipper", format: "AMRAP", capMin: (bump) => 10 + bump,
+    blocks: (equipment, kbW) => [
+      { name: "Treadmill sprints", detail: "150m hard" },
+      { name: `Kettlebell swings (${kbW}kg)`, detail: "15 reps" },
+      { name: "Pull-ups", detail: "3-5 reps" },
+    ],
+  },
+  {
+    key: "carryCore", title: "Carry & Core", format: "AMRAP", capMin: (bump) => 14 + bump,
+    blocks: (equipment, kbW, dbW) => [
+      { name: "Farmer's carry — heavy & short (grip fatigue)", detail: "20m, near-max load" },
+      legPowerStation(equipment, dbW),
+      { name: "Battle rope waves", detail: "30s max effort" },
+      { name: "Reverse lunges", detail: "10 reps (5/leg), controlled — no jumping" },
+    ],
+  },
+  {
+    key: "ladderDown", title: "The Ladder Down", format: "For Time", rounds: () => "21-15-9 reps",
+    blocks: (equipment, kbW) => [
+      { name: `Kettlebell swings (${kbW}kg)`, detail: "21-15-9" },
+      { name: "Burpees", detail: "21-15-9" },
+    ],
+  },
+  {
+    key: "fiveRounds", title: "5 Rounds", format: "For Time", rounds: () => "5 rounds",
+    blocks: (equipment) => [
+      { name: `${engineStation(equipment)} — 200m`, detail: "Per round" },
+      { name: "Reverse lunges", detail: "10 reps (5/leg), controlled — no jumping" },
+      { name: "Pull-ups", detail: "3-5 reps" },
+    ],
+  },
+  {
+    key: "gripBuster", title: "Grip Buster", format: "For Time", rounds: () => "4 rounds",
+    blocks: (equipment, kbW) => [
+      { name: "Farmer's carry (trap bar or heavy DBs)", detail: "40m per round" },
+      { name: `KB goblet squat (${kbW}kg)`, detail: "10 reps" },
+      { name: "Pull-ups", detail: "3-5 reps" },
+    ],
+  },
+  {
+    key: "sprintStrength", title: "Sprint & Strength", format: "For Time", rounds: () => "5 rounds",
+    blocks: (equipment, kbW, dbW) => [
+      { name: "Treadmill sprints", detail: "150m per round" },
+      { name: `DB thrusters (${dbW}kg pair)`, detail: "10 reps" },
+    ],
+  },
+  {
+    key: "gauntlet", title: "The Gauntlet", format: "For Time", rounds: () => "3 rounds",
+    blocks: (equipment) => [
+      { name: "Battle rope waves", detail: "30s max effort" },
+      { name: "Burpees", detail: "10 reps" },
+      { name: "Pull-ups", detail: "3-5 reps" },
+      { name: `${engineStation(equipment)} — 250m`, detail: "Per round" },
+    ],
+  },
+];
+function getAutoFinisherKeys(equipment) { return MIXED_FINISHERS.map((w) => w.key); }
+function getAllFinisherKeys(equipment) { return getAutoFinisherKeys(equipment); }
+const FINISHER_META = Object.fromEntries(MIXED_FINISHERS.map((w) => [
+  w.key,
+  { label: w.title, space: w.format === "AMRAP" ? `AMRAP` : `For Time — ${w.rounds()}` },
+]));
+function condShort(week, style, equipment) {
+  const workout = MIXED_FINISHERS.find((w) => w.key === style) || MIXED_FINISHERS[0];
   const bump = Math.min(3, Math.floor(week / 6));
-  const blocks = {
-    ski: [{ name: "Ski Erg intervals", detail: `${5 + bump} x 250m, 30s rest — hold pace, don't fade` }],
-    sled: [{ name: "Sled push (Bulldog Saxon)", detail: `${4 + bump} x 20m, moderate load, 60s rest` }],
-    rope: [{ name: "Battle rope waves", detail: `${5 + bump} x 30s on / 30s off, max effort` }],
-    kbSwing: [{ name: `Kettlebell swings (${nearestFrom(KB_WEIGHTS, 16 + bump * 2)}kg)`, detail: `${4 + bump} x 20 reps, 45s rest` }],
-    treadmill: [{ name: "Treadmill sprints", detail: `${4 + bump} x 200m hard, walk-back recovery` }],
-    burpee: [{ name: "Burpee broad jumps", detail: `${3 + bump} x 10 reps, rest as needed` }],
-    row: [{ name: "Rowing intervals", detail: `${5 + bump} x 250m, 30s rest — drive with the legs` }],
-    wallball: [{ name: "Wall balls", detail: `${4 + bump} x 15 reps, rest as needed` }],
-  };
-  return blocks[style];
+  const kbW = nearestFrom(KB_WEIGHTS, 16 + bump * 2);
+  const dbW = roundAdjDb(10 + bump * 2);
+  return workout.blocks(equipment, kbW, dbW);
 }
-// Deterministic-but-varied weekly assignment: shuffles the auto pool with the
-// week number as a seed, so it's different week to week but stable if you revisit a week.
+function condLabel(week, style) {
+  const workout = MIXED_FINISHERS.find((w) => w.key === style) || MIXED_FINISHERS[0];
+  const bump = Math.min(3, Math.floor(week / 6));
+  return workout.format === "AMRAP" ? `AMRAP · ${workout.capMin(bump)} MIN` : `FOR TIME · ${workout.rounds()}`;
+}
+// Deterministic-but-varied weekly assignment: shuffles the mixed-workout library with the
+// week number as a seed, so the mix is different week to week but stable if you revisit a week.
 function weeklyFinisherAssignment(week, equipment) {
   const order = seededShuffle(getAutoFinisherKeys(equipment), week * 97 + 13);
   const days = ["mon", "tue", "thu", "fri"];
@@ -286,7 +372,7 @@ function weeklyFinisherAssignment(week, equipment) {
 
 function hyroxSimSession(week, equipment) {
   const phase = getPhase(week);
-  const runM = { foundation: 400, build: 500, intensify: 600, peak: 600, race: 300 }[phase.id];
+  const runM = 800; // flat distance every week — matches real Hyrox spacing
   const stations = phase.id === "foundation" ? 4 : phase.id === "build" ? 6 : phase.id === "race" ? 3 : 8;
   const kbSwingW = nearestFrom(KB_WEIGHTS, 16);
   const dbThrusterW = roundAdjDb(12);
@@ -298,13 +384,13 @@ function hyroxSimSession(week, equipment) {
     : { name: `DB thrusters (${dbThrusterW}kg pair) — wall ball sub`, detail: "No wall ball: thrusters mimic leg-drive-to-overhead" };
   const pool = [
     { name: "Ski Erg", detail: "250-500m depending on station count" },
-    { name: "Sled Push (Bulldog Saxon)", detail: "25m down, moderate-heavy load" },
+    { name: "Farmer's carry (trap bar or heavy DBs)", detail: "50m, moderate-heavy load — sled push sub (no handles to push with)" },
     { name: "Sled Pull (Bulldog Saxon)", detail: "25m back, rope/strap pull" },
     { name: "Burpee broad jumps", detail: "15-20m worth of reps" },
     rowStation,
-    { name: "Farmer's carry (trap bar or heavy DBs)", detail: "40-50m" },
     { name: "Weighted lunges (vest or dip belt)", detail: "40-50m, controlled depth" },
     wallballStation,
+    { name: `KB swings, heavy (${nearestFrom(KB_WEIGHTS, 24)}kg)`, detail: "20-25 reps, hip-driven power" },
   ];
   return { title: `Hyrox Simulation — ${stations} station${stations > 1 ? "s" : ""}`, intro: `Run ${runM}m between every station, race-effort pace, station straight into the next run.`, stations: pool.slice(0, stations) };
 }
@@ -445,7 +531,7 @@ function simpleSinisterWeight(week) {
   if (week <= 18) return 20;
   return 25;
 }
-function buildSimpleSinisterDay(dayKey, week, finisherFor, warmup) {
+function buildSimpleSinisterDay(dayKey, week, finisherFor, warmup, equipment) {
   const swingW = simpleSinisterWeight(week);
   const tguW = nearestFrom(KB_WEIGHTS, Math.max(12, swingW - 4));
   return {
@@ -454,7 +540,7 @@ function buildSimpleSinisterDay(dayKey, week, finisherFor, warmup) {
       { id: `${dayKey}-ssswings`, name: `Kettlebell Swings (${swingW}kg)`, equipment: "single kettlebell", sets: 10, reps: "10 (EMOM style, ~1 min/set)", weightKg: swingW, trackWeight: true, note: swingW < 25 ? "Building toward your heaviest KB (25kg)" : "At your heaviest available KB — true Simple standard is 32kg if you pick one up later" },
       { id: `${dayKey}-sstgu`, name: `Turkish Get-Ups (${tguW}kg)`, equipment: "single kettlebell", sets: 10, reps: "1/side, alternate", weightKg: tguW, trackWeight: true },
     ],
-    conditioning: condShort(week, finisherFor(dayKey)), conditioningKey: finisherFor(dayKey),
+    conditioning: condShort(week, finisherFor(dayKey), equipment), conditioningKey: finisherFor(dayKey), conditioningLabel: condLabel(week, finisherFor(dayKey)),
   };
 }
 
@@ -468,17 +554,19 @@ function buildDaySession(dayKey, week, profile, logs, equipment, template = "def
   const finisherFor = (d) => override || finishers[d];
 
   if (template === "simplesinister" && ["mon", "tue", "thu", "fri"].includes(dayKey)) {
-    return buildSimpleSinisterDay(dayKey, week, finisherFor, warmup);
+    return buildSimpleSinisterDay(dayKey, week, finisherFor, warmup, equipment);
   }
 
   const mkMain = (liftKey, name, eq) => {
     if (template !== "default") {
       return buildMainEntries(template, dayKey, liftKey, name, eq, profile, logs, week, sets, phase.repsMain);
     }
-    const w = mainLiftWeight(profile, logs, liftKey, week);
-    return [{ id: `${dayKey}-${liftKey}`, name, equipment: eq, sets, reps: phase.repsMain, weightKg: w, liftKey, trackWeight: true, note: w == null ? "Set your 1RM in Setup for a weight recommendation" : undefined }];
+    const w = liftKey === "ohp" ? ohpWeight(profile, week) : mainLiftWeight(profile, logs, liftKey, week);
+    const note = w == null ? "Set your 1RM in Setup for a weight recommendation" : (liftKey === "ohp" ? "Flat +2.5kg/week progression" : undefined);
+    return [{ id: `${dayKey}-${liftKey}`, name, equipment: eq, sets, reps: phase.repsMain, weightKg: w, liftKey, trackWeight: true, note }];
   };
   const mkAcc = (id, name, eq, s, reps, weightKg) => ({ id: `${dayKey}-${id}`, name, equipment: eq, sets: s, reps, weightKg: weightKg ?? null, trackWeight: true });
+  const mkCond = (d) => ({ conditioning: condShort(week, finisherFor(d), equipment), conditioningKey: finisherFor(d), conditioningLabel: condLabel(week, finisherFor(d)) });
 
   if (dayKey === "mon") {
     const dl = mainLiftWeight(profile, logs, "trapDeadlift", week);
@@ -487,24 +575,24 @@ function buildDaySession(dayKey, week, profile, logs, equipment, template = "def
       strength: [
         ...mkMain("squat", "Back Squat", "20kg barbell + plates, squat rack"),
         mkAcc("speedpull", "Trap Bar Deadlift (light, speed pulls)", "25kg trap bar", 3, "5", dl ? roundBar(dl * 0.6) : null),
-        mkAcc("stepup", "Weighted step-ups", "vest or dumbbells", 3, "10/leg"),
+        mkAcc("stepup", "Weighted step-ups", "vest or dumbbells", 2, "10/leg"),
       ],
-      conditioning: condShort(week, finisherFor("mon")), conditioningKey: finisherFor("mon"),
+      ...mkCond("mon"),
     };
   }
   if (dayKey === "tue") {
     const strength = [
       ...mkMain("swissBench", "Swiss Bar Bench Press (shoulder-friendly grip)", "28kg Swiss bar"),
       mkAcc("pullup", "Weighted pull-ups", "pull-up bar + dip belt", sets, "5-8"),
-      mkAcc("dips", "Weighted dips", "dip bar + dip belt", 3, "8-10"),
+      mkAcc("dips", "Weighted dips", "dip bar + dip belt", 2, "8-10"),
     ];
     if (equipment?.adjustableBench) {
-      strength.push(mkAcc("inclinebench", "Incline DB Bench Press", "adjustable bench + dumbbells", 3, "8-10"));
+      strength.push(mkAcc("inclinebench", "Incline DB Bench Press", "adjustable bench + dumbbells", 2, "8-10"));
     }
     return {
       dayType: "Upper Push/Pull", warmup,
       strength,
-      conditioning: condShort(week, finisherFor("tue")), conditioningKey: finisherFor("tue"),
+      ...mkCond("tue"),
     };
   }
   if (dayKey === "thu") {
@@ -513,9 +601,9 @@ function buildDaySession(dayKey, week, profile, logs, equipment, template = "def
       strength: [
         ...mkMain("trapDeadlift", "Trap Bar Deadlift", "25kg trap bar"),
         mkAcc("rdl", "Single-leg RDL (DB)", "adjustable dumbbells", 3, "8/leg"),
-        mkAcc("carry", "Farmer's carry", "trap bar or heavy dumbbells", 3, "40m"),
+        mkAcc("carry", "Farmer's carry", "trap bar or heavy dumbbells", 2, "40m"),
       ],
-      conditioning: condShort(week, finisherFor("thu")), conditioningKey: finisherFor("thu"),
+      ...mkCond("thu"),
     };
   }
   if (dayKey === "fri") {
@@ -524,9 +612,9 @@ function buildDaySession(dayKey, week, profile, logs, equipment, template = "def
       strength: [
         ...mkMain("ohp", "Standing Overhead Press", "20kg barbell"),
         mkAcc("lunge", "Weighted walking lunges", "vest or dip belt", 3, "12/leg"),
-        mkAcc("goblet", "KB goblet squat", `${nearestFrom(KB_WEIGHTS, 20)}kg kettlebell`, 3, "10"),
+        mkAcc("goblet", "KB goblet squat", `${nearestFrom(KB_WEIGHTS, 20)}kg kettlebell`, 2, "10"),
       ],
-      conditioning: condShort(week, finisherFor("fri")), conditioningKey: finisherFor("fri"),
+      ...mkCond("fri"),
     };
   }
   if (dayKey === "sat") return { dayType: "Hyrox Simulation", warmup, sim: hyroxSimSession(week, equipment) };
@@ -1450,7 +1538,7 @@ function FinisherPicker({ activeKey, availableKeys, onSelect, onClose }) {
           }}>
             <div>
               <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: isActive ? C.hazard : C.text, fontSize: 17 }}>{meta.label}</div>
-              <div style={{ fontFamily: FONT_BODY, fontSize: 14.5, color: key === "sled" ? C.signal : C.textFaint, marginTop: 2 }}>{meta.space}</div>
+              <div style={{ fontFamily: FONT_BODY, fontSize: 14.5, color: C.textFaint, marginTop: 2 }}>{meta.space}</div>
             </div>
             {isActive && <CheckCircle2 size={16} color={C.hazard} />}
           </button>
@@ -1613,9 +1701,14 @@ function ProgramTab({ profile, logs, equipment, template, saveEntry, saveDayMeta
             <div style={{ fontFamily: FONT_MONO, fontSize: 15, color: C.textFaint, letterSpacing: 1, margin: "16px 0 8px" }}>STRENGTH</div>
             {session.strength.map((ex) => <ExerciseCard key={ex.id} ex={ex} week={week} logs={logs} dayType={session.dayType} onSave={saveEntry} />)}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "20px 0 8px" }}>
-              <div style={{ fontFamily: FONT_MONO, fontSize: 15, color: C.textFaint, letterSpacing: 1 }}>CONDITIONING · 10-15 MIN</div>
+              <div style={{ fontFamily: FONT_MONO, fontSize: 15, color: C.textFaint, letterSpacing: 1 }}>CONDITIONING · {session.conditioningLabel || "MIXED SESSION"}</div>
               <button onClick={() => onTimeWorkout(`${session.dayType} Finisher`, session.conditioning)} style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", color: C.signal, fontFamily: FONT_MONO, fontSize: 15, cursor: "pointer" }}><TimerIcon size={13} /> Time it</button>
             </div>
+            {FINISHER_META[session.conditioningKey] && (
+              <div style={{ fontFamily: FONT_DISPLAY, fontSize: 19, color: C.signal, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+                {FINISHER_META[session.conditioningKey].label}
+              </div>
+            )}
             {session.conditioning.map((c, i) => (
               <div key={i} style={{ background: C.bgCard, border: `1px solid ${C.line}`, borderRadius: 8, padding: 14, marginBottom: 8 }}>
                 <div style={{ fontFamily: FONT_BODY, fontWeight: 600, color: C.text, fontSize: 18 }}>{c.name}</div>
