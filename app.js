@@ -370,10 +370,10 @@ function weeklyFinisherAssignment(week, equipment) {
   return map;
 }
 
-function hyroxSimSession(week, equipment) {
+function hyroxSimSession(week, equipment, opts = {}) {
   const phase = getPhase(week);
-  const runM = 800; // flat distance every week — matches real Hyrox spacing
-  const stations = phase.id === "foundation" ? 4 : phase.id === "build" ? 6 : phase.id === "race" ? 3 : 8;
+  const runM = 1000; // flat 1km every week — matches real Hyrox spacing
+  const stations = opts.stations || (phase.id === "foundation" ? 4 : phase.id === "build" ? 6 : phase.id === "race" ? 3 : 8);
   const kbSwingW = nearestFrom(KB_WEIGHTS, 16);
   const dbThrusterW = roundAdjDb(12);
   const rowStation = equipment?.rower
@@ -381,7 +381,9 @@ function hyroxSimSession(week, equipment) {
     : { name: `KB swings (${kbSwingW}kg) — rowing sub`, detail: "No rower: max-effort KB swings for the same interval" };
   const wallballStation = equipment?.wallball
     ? { name: "Wall Balls — 100 reps", detail: "Real Hyrox rep count, break early rather than grind late" }
-    : { name: `DB thrusters (${dbThrusterW}kg pair) — wall ball sub`, detail: "No wall ball: thrusters mimic leg-drive-to-overhead" };
+    : opts.shoulderSafe
+      ? { name: `KB goblet squats (${nearestFrom(KB_WEIGHTS, 20)}kg) — wall ball sub`, detail: "50 reps, no overhead work while the shoulder recovers" }
+      : { name: `DB thrusters (${dbThrusterW}kg pair) — wall ball sub`, detail: "No wall ball: thrusters mimic leg-drive-to-overhead" };
   const pool = [
     { name: "Ski Erg", detail: "250-500m depending on station count" },
     { name: "Farmer's carry (trap bar or heavy DBs)", detail: "50m, moderate-heavy load — sled push sub (no handles to push with)" },
@@ -451,6 +453,7 @@ const STRENGTH_TEMPLATES = [
   { id: "531", name: "Wendler 5/3/1", blurb: "4-week waves off a 90%-of-1RM training max. One heavy top set each week, training max climbs each cycle." },
   { id: "rpt", name: "Reverse Pyramid (RPT)", blurb: "One heavy top set, then two lighter back-off sets with a couple more reps." },
   { id: "doubleprog", name: "Double Progression", blurb: "Hold a weight across a 6-10 rep range — only add weight once every set hits 9-10 reps." },
+  { id: "raceprep", name: "Race Prep — Endurance/HIIT", blurb: "Final-weeks block: 40-min endurance + HIIT sessions, no pull-ups or overhead pressing, strength kept ticking over, Saturday Hyrox sim kept, auto-tapers into race week." },
   { id: "simplesinister", name: "Simple & Sinister", blurb: "Pavel Tsatsouline's kettlebell standard: swings + Turkish get-ups, most days, building toward your heaviest bell." },
 ];
 
@@ -544,6 +547,150 @@ function buildSimpleSinisterDay(dayKey, week, finisherFor, warmup, equipment) {
   };
 }
 
+/* =========================================================================
+   RACE PREP (final-weeks endurance / HIIT block)
+   40-minute sessions: ~5 warm-up + ~7 strength primer + ~26 conditioning + ~2 cool-down.
+   Shoulder-friendly: no pull-ups, dips, overhead pressing or battle ropes. Strength is
+   kept ticking over with leg/hip work only. Stage is keyed off weeks LEFT before race
+   day (PROGRAM_WEEKS - week), so it tapers correctly however many weeks you set.
+   ======================================================================= */
+function racePrepStage(week) {
+  const left = Math.max(0, PROGRAM_WEEKS - week);
+  if (left >= 3) return { id: "build", name: "Engine Build", left };
+  if (left === 2) return { id: "peak", name: "Peak Load", left };
+  if (left === 1) return { id: "sharpen", name: "Sharpen", left };
+  return { id: "race", name: "Race Week", left };
+}
+
+function racePrepWarmup(dayKey) {
+  const w = [
+    { name: dayKey === "sat" ? "Easy jog (treadmill, 1% incline)" : "Easy walk to jog (treadmill, 1% incline)", seconds: dayKey === "sat" ? 150 : 120, detail: "Build gradually, nose-breathing pace" },
+    { name: "Leg swings + hip circles", seconds: 60, detail: "10/leg each direction, hold the rack for balance" },
+    { name: "Bodyweight squats + reverse lunges", seconds: 60, detail: "10 squats, then 5 lunges/leg" },
+    { name: "Glute bridges", seconds: 45, detail: "12 reps, squeeze at the top" },
+    dayKey === "sat"
+      ? { name: "2 x 20s strides", seconds: 60, detail: "Smooth, fast, not a sprint" }
+      : { name: "Gentle shoulder rolls (no load)", seconds: 30, detail: "Small pain-free circles, nothing forced" },
+  ];
+  return w;
+}
+
+function buildRacePrepDay(dayKey, week, profile, equipment) {
+  const stage = racePrepStage(week);
+  const warmup = racePrepWarmup(dayKey);
+  const kb = (t) => nearestFrom(KB_WEIGHTS, t);
+  const eng = equipment?.rower ? "Row" : "Ski Erg";
+  const engNote = equipment?.rower ? "" : " (low damper, hips drive it, easy on the arms)";
+  const dl = profile?.trapDeadlift;
+  const note = "Shoulder-safe session: no pull-ups, dips or overhead pressing. If anything makes the right shoulder twinge, swap that station for the treadmill or a carry and carry on.";
+  const mk = (id, name, eq, sets, reps, weightKg, extra) => ({ id: `${dayKey}-rp-${id}`, name, equipment: eq, sets, reps, weightKg: weightKg ?? null, trackWeight: true, ...(extra || {}) });
+  const race = stage.id === "race";
+  const peak = stage.id === "peak";
+  const sharpen = stage.id === "sharpen";
+
+  /* ---------- RACE WEEK: short, sharp, fresh ---------- */
+  if (race) {
+    if (dayKey === "mon") return { dayType: "Race Week — Tempo Touch", mins: 30, note, warmup, strength: [mk("goblet", "KB goblet squat (light)", `${kb(16)}kg kettlebell`, 2, "8", kb(16))], conditioning: [
+      { name: "Treadmill race-pace blocks", detail: "3 x 4 min at race pace (RPE 7-8), 2 min easy walk/jog between" },
+      { name: "Easy jog", detail: "6 min easy, then walk 2 min" },
+    ], conditioningLabel: "3 x 4 MIN RACE PACE" };
+    if (dayKey === "tue") return { dayType: "Race Week — Sharpen", mins: 30, note, warmup, strength: [mk("stepup", "Bodyweight step-ups", "box or bench", 2, "8/leg", null)], conditioning: [
+      { name: "Treadmill 400m repeats", detail: "6 x 400m at race pace, 90s walk between" },
+      { name: `${eng} 3 x 250m${engNote}`, detail: "Smooth and controlled, 60s rest" },
+    ], conditioningLabel: "6 x 400M + ENGINE" };
+    if (dayKey === "thu") return { dayType: "Race Week — Easy Engine", mins: 30, note, warmup, strength: [mk("lunge", "Bodyweight reverse lunges", "bodyweight", 2, "8/leg", null)], conditioning: [
+      { name: "Easy treadmill jog", detail: "10 min at RPE 5, conversational" },
+      { name: `${eng} steady${engNote}`, detail: "5 min easy" },
+      { name: "Farmer's carry (light)", detail: "2 x 40m, tall posture, easy grip" },
+    ], conditioningLabel: "EASY 20 MIN" };
+    if (dayKey === "fri") return { dayType: "Race Week — Opener", mins: 25, note, warmup, strength: [mk("goblet", "KB goblet squat (light)", `${kb(16)}kg kettlebell`, 2, "6", kb(16))], conditioning: [
+      { name: "Mini race rounds at 70% effort", detail: "2 rounds: 400m run, then 250m engine, then 25m farmer's carry. Stop feeling fresh." },
+    ], conditioningLabel: "2 MINI ROUNDS" };
+    if (dayKey === "sat") return { dayType: "Day-Before Shakeout", mins: 20, note: "Nothing hard today. Lay out kit, hydrate, eat well, early night. Race is tomorrow.", warmup: [], sim: {
+      title: "Shakeout — 20 min easy",
+      intro: "Keep it short and relaxed. You should finish wanting more.",
+      stations: [
+        { name: "Easy jog", detail: "10 min, RPE 4-5" },
+        { name: "4 x 20s strides", detail: "Race-pace feel, 60s walk between" },
+        { name: "Mobility", detail: "5 min hips, calves, thoracic spine. Shoulder rolls, pain-free only." },
+      ],
+    } };
+    return null;
+  }
+
+  /* ---------- BUILD / PEAK / SHARPEN ---------- */
+  if (dayKey === "mon") {
+    const reps = sharpen ? "3 x 6 min at slightly faster (race pace, RPE 8), 2 min easy between" : peak ? "4 x 6 min at RPE 7-8, 90s walk/jog between" : "4 x 5 min at RPE 7 (comfortably hard), 90s walk/jog between";
+    return { dayType: "Run Engine — Tempo", mins: 40, note, warmup,
+      strength: [
+        mk("deadlift", "Trap bar deadlift (maintenance)", "25kg trap bar", 3, "5", dl ? roundBar(dl * 0.7) : null, { liftKey: "trapDeadlift" }),
+        mk("goblet", "KB goblet squat", `${kb(20)}kg kettlebell`, 2, "10", kb(20)),
+      ],
+      conditioning: [
+        { name: "Treadmill tempo intervals (1% incline)", detail: reps },
+        { name: "Cool-down", detail: sharpen ? "4 min easy jog, then 2 min walk" : "2 min easy walk, quick hip stretch" },
+      ],
+      conditioningLabel: sharpen ? "3 x 6 MIN TEMPO" : peak ? "4 x 6 MIN TEMPO" : "4 x 5 MIN TEMPO" };
+  }
+  if (dayKey === "tue") {
+    const cycle = (peak || sharpen) ? 5 : 6;
+    const rounds = peak ? 5 : sharpen ? 4 : 4;
+    const total = cycle * rounds;
+    const blocks = [
+      { name: `EMOM ${total} min: ${cycle}-minute cycle x ${rounds}`, detail: cycle === 6 ? "~40s of work, rest the remainder of the minute. Minute 6 is a full rest." : "~40s of work, rest the remainder of the minute. Same cycle, no rest minute: tougher." },
+      { name: `Min 1: ${eng} 200m${engNote}`, detail: "Strong but smooth" },
+      { name: `Min 2: Kettlebell swings (${kb(peak ? 20 : 16)}kg)`, detail: "15 reps" },
+      { name: "Min 3: Reverse lunges", detail: "12 reps (6/leg), no jumping" },
+      { name: "Min 4: Step-back burpees", detail: "8 reps, step back and step in, no jump" },
+      { name: `Min 5: KB goblet squat (${kb(20)}kg)`, detail: "12 reps" },
+    ];
+    return { dayType: "HIIT — Legs & Engine", mins: 40, note, warmup,
+      strength: [
+        mk("stepup", "Weighted step-ups", "vest or dumbbells", 3, "8/leg", null),
+        mk("carry", "Farmer's carry (heavy)", "trap bar or heavy dumbbells", 3, "40m", null),
+      ],
+      conditioning: blocks, conditioningLabel: `EMOM ${total} MIN` };
+  }
+  if (dayKey === "thu") {
+    const rounds = sharpen ? 2 : 3;
+    const runMin = peak ? 5 : sharpen ? 4 : 4;
+    return { dayType: "Aerobic Base + Carries", mins: 40, note, warmup,
+      strength: [mk("lunge", "Weighted walking lunges", "vest or dumbbells", 3, "10/leg", null)],
+      conditioning: [
+        { name: `${rounds} rounds, steady and controlled`, detail: sharpen ? "A touch quicker than build weeks, still RPE 7 max" : "RPE 6-7. You can talk in short sentences." },
+        { name: `Treadmill run, ${runMin} min`, detail: "1% incline, even pace" },
+        { name: `${eng} 400m${engNote}`, detail: "Steady" },
+        { name: "Farmer's carry", detail: "2 x 40m, tall posture, 1 min easy walk after" },
+        ...(sharpen ? [{ name: "Easy finish", detail: "6 min easy jog" }] : []),
+      ],
+      conditioningLabel: `${rounds} ROUNDS STEADY` };
+  }
+  if (dayKey === "fri") {
+    const amrap = peak ? 22 : sharpen ? 16 : 20;
+    return { dayType: "HIIT Circuit", mins: 40, note, warmup,
+      strength: [
+        mk("speedpull", "Trap bar deadlift (light, speed pulls)", "25kg trap bar", 3, "3", dl ? roundBar(dl * 0.6) : null, { liftKey: "trapDeadlift" }),
+        mk("goblet", "KB goblet squat", `${kb(20)}kg kettlebell`, 2, "10", kb(20)),
+      ],
+      conditioning: [
+        { name: `AMRAP ${amrap} min`, detail: "As many rounds as possible, move steadily, don't redline in round 1" },
+        { name: "Treadmill sprint", detail: "200m hard (RPE 8)" },
+        { name: `Kettlebell swings (${kb(peak ? 20 : 16)}kg)`, detail: "12 reps" },
+        { name: `KB goblet squat (${kb(20)}kg)`, detail: "10 reps" },
+        { name: "Step-back burpees", detail: "6 reps, no jump" },
+        { name: `${eng} 150m${engNote}`, detail: "Fast and smooth" },
+        { name: "Finisher: farmer's carry", detail: sharpen ? "3 x 40m heavy, 30s rest" : "4 x 40m heavy, 30s rest" },
+      ],
+      conditioningLabel: `AMRAP ${amrap} MIN` };
+  }
+  if (dayKey === "sat") {
+    // Keep the normal Hyrox simulation: full length, 1km runs. Station count follows the stage.
+    const stations = peak ? 8 : 6;
+    return { dayType: "Hyrox Simulation", mins: 60, note, warmup, sim: hyroxSimSession(week, equipment, { stations, shoulderSafe: true }) };
+  }
+  return null;
+}
+
 function buildDaySession(dayKey, week, profile, logs, equipment, template = "default") {
   const phase = getPhase(week);
   const deload = isDeload(week);
@@ -552,6 +699,8 @@ function buildDaySession(dayKey, week, profile, logs, equipment, template = "def
   const warmup = dynamicWarmup(dayKey);
   const override = logs[wKey(week)]?.days?.[dayKey]?.finisherOverride;
   const finisherFor = (d) => override || finishers[d];
+
+  if (template === "raceprep") return buildRacePrepDay(dayKey, week, profile, equipment);
 
   if (template === "simplesinister" && ["mon", "tue", "thu", "fri"].includes(dayKey)) {
     return buildSimpleSinisterDay(dayKey, week, finisherFor, warmup, equipment);
@@ -1564,7 +1713,7 @@ function estimateMainWeight(template, liftKey, profile, logs, week) {
   const oneRm = profile[liftKey];
   if (!oneRm) return null;
   if (template === "default") return mainLiftWeight(profile, logs, liftKey, week);
-  if (template === "simplesinister") return null; // not a barbell-1RM lift under this template
+  if (template === "simplesinister" || template === "raceprep") return null; // not a barbell-1RM progression under these templates
   const entries = buildMainEntries(template, "summary", liftKey, "", "", profile, logs, week, 4, "6-8");
   return entries && entries[0] ? entries[0].weightKg : null;
 }
@@ -1575,7 +1724,7 @@ function ProgramSummary({ profile, logs, week, template }) {
   const liftLabels = { squat: "Squat", swissBench: "Bench", trapDeadlift: "Deadlift", ohp: "OHP" };
   const tmpl = STRENGTH_TEMPLATES.find((t) => t.id === template) || STRENGTH_TEMPLATES[0];
 
-  const deltas = template === "simplesinister"
+  const deltas = (template === "simplesinister" || template === "raceprep")
     ? (() => {
         const w1 = simpleSinisterWeight(1), wNow = simpleSinisterWeight(week);
         return wNow > w1 ? [{ label: "KB Swings", delta: wNow - w1 }] : [];
@@ -1591,10 +1740,12 @@ function ProgramSummary({ profile, logs, week, template }) {
     <div style={{ background: C.bgRaised, border: `1px solid ${C.line}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
       <div style={{ fontFamily: FONT_MONO, fontSize: 14, color: C.hazard, letterSpacing: 1, marginBottom: 6 }}>PROGRAM OVERVIEW</div>
       <div style={{ fontFamily: FONT_BODY, fontSize: 16, color: C.text, lineHeight: 1.5 }}>
-        {PROGRAM_WEEKS}-week Hyrox build · Week {week} of {PROGRAM_WEEKS} · <span style={{ fontWeight: 600 }}>{phase.name}</span>
+        {PROGRAM_WEEKS}-week Hyrox build · Week {week} of {PROGRAM_WEEKS} · <span style={{ fontWeight: 600 }}>{template === "raceprep" ? racePrepStage(week).name : phase.name}</span>
       </div>
       <div style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.textDim, marginTop: 4, lineHeight: 1.5 }}>
-        {template === "default"
+        {template === "raceprep"
+          ? "Race Prep: endurance and HIIT first, strength held at maintenance. Tapers automatically into race week."
+          : template === "default"
           ? `Working sets run ${Math.round(phase.intensity[0] * 100)}%→${Math.round(phase.intensity[1] * 100)}% of your 1RM this phase, ${phase.id === "peak" ? "no deload — stay fresh" : phase.id === "race" ? "tapering into race week" : "deloading every 4th week"}.`
           : `Strength style: ${tmpl.name} — ${tmpl.blurb}`}
       </div>
@@ -1644,7 +1795,7 @@ function ProgramTab({ profile, logs, equipment, template, saveEntry, saveDayMeta
   const phase = getPhase(week);
   const deload = isDeload(week);
   const phaseIdx = PHASES.findIndex((p) => p.id === phase.id);
-  const sessions = useMemo(() => DAY_DEFS.map((d) => ({ ...d, session: buildDaySession(d.key, week, profile, logs, equipment, template) })), [week, profile, logs, equipment, template]);
+  const sessions = useMemo(() => DAY_DEFS.map((d) => ({ ...d, session: buildDaySession(d.key, week, profile, logs, equipment, template) })).map((s) => ({ ...s, mins: s.session?.mins || s.mins })), [week, profile, logs, equipment, template]);
   const active = activeDay ? sessions.find((s) => s.key === activeDay) : null;
   const wk = wKey(week);
 
@@ -1671,7 +1822,8 @@ function ProgramTab({ profile, logs, equipment, template, saveEntry, saveDayMeta
         <MiniTimerBar engine={engine} onOpen={onOpenTimer} />
         <div style={{ marginBottom: 6 }}><Pill tone={session?.sim ? "signal" : "hazard"}>{label} · {mins} min</Pill></div>
         <h2 style={{ fontFamily: FONT_DISPLAY, fontSize: 33, color: C.text, margin: "6px 0 4px", textTransform: "uppercase" }}>{session.dayType}</h2>
-        {deload && <div style={{ fontFamily: FONT_MONO, fontSize: 16, color: C.signal, marginBottom: 8 }}>DELOAD WEEK — reduced load, same intent</div>}
+        {session.note && <div style={{ fontFamily: FONT_BODY, fontSize: 15, color: C.textDim, lineHeight: 1.5, marginBottom: 10 }}>{session.note}</div>}
+        {deload && template !== "raceprep" && <div style={{ fontFamily: FONT_MONO, fontSize: 16, color: C.signal, marginBottom: 8 }}>DELOAD WEEK — reduced load, same intent</div>}
 
         {completed && (
           <div style={{ fontFamily: FONT_MONO, fontSize: 16, color: C.hazard, marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
@@ -1723,7 +1875,7 @@ function ProgramTab({ profile, logs, equipment, template, saveEntry, saveDayMeta
                 onSelect={(key) => { saveDayMeta(active.key, { finisherOverride: key }); setShowFinisherPicker(false); }}
                 onClose={() => setShowFinisherPicker(false)}
               />
-            ) : (
+            ) : template === "raceprep" ? null : (
               <button onClick={() => setShowFinisherPicker(true)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, background: "none", border: `1px dashed ${C.line}`, borderRadius: 8, padding: "10px", color: C.textDim, fontFamily: FONT_MONO, fontSize: 15, letterSpacing: 0.5, cursor: "pointer", marginBottom: 8 }}>
                 <RotateCcw size={13} /> Select New Workout
               </button>
